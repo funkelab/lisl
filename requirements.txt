@@ -1,0 +1,6 @@
+daisy
+git+git://github.com/funkelab/funlib.learn.torch@970ace90b21d653a909ac6134092e1f3a0c8098b#egg=funlib.evaluate
+gunpowder
+torch
+tqdm
+zarr
