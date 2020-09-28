@@ -298,6 +298,8 @@ def random_point_pairs_pipeline(
                 raw_1: 'raw_1',
                 locations_0: 'locations_0',
                 locations_1: 'locations_1',
+                points_0: 'points_0',
+                points_1: 'points_1',
                 emb_0: 'emb_0',
                 emb_1: 'emb_1'
             },
