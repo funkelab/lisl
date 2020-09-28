@@ -3,9 +3,12 @@ import argparse
 import configparser
 import gunpowder as gp
 import lisl
+import torch
 import logging
 
 logging.basicConfig(level=logging.INFO)
+
+torch.backends.cudnn.benchmark = True
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
