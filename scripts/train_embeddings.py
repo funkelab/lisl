@@ -3,6 +3,9 @@ import argparse
 import configparser
 import gunpowder as gp
 import lisl
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
