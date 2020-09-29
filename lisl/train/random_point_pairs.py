@@ -266,7 +266,7 @@ def random_point_pairs_pipeline(
                 emb_0: gp.ArraySpec(voxel_size=emb_voxel_size),
                 emb_1: gp.ArraySpec(voxel_size=emb_voxel_size)
             },
-            checkpoint_basename=out_dir + '/',
+            checkpoint_basename=os.path.join(out_dir, 'model'),
             save_every=checkpoint_interval
         )
     )
