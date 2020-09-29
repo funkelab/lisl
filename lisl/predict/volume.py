@@ -16,7 +16,8 @@ def predict_volume(
         out_filename,
         out_ds_names,
         checkpoint,
-        normalize_factor=None):
+        normalize_factor=None,
+        model_output=0):
 
     raw = gp.ArrayKey('RAW')
     prediction = gp.ArrayKey('PREDICTION')
@@ -93,7 +94,7 @@ def predict_volume(
                 'raw_0': raw
             },
             outputs={
-                0: prediction
+                model_output: prediction
             },
             array_specs={
                 prediction: gp.ArraySpec(roi=raw_roi)

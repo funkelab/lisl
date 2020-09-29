@@ -32,6 +32,10 @@ if __name__ == "__main__":
     out_filename = eval(config['predict']['out_filename'])
     out_ds_names = eval(config['predict']['out_ds_names'])
     out_dir = '.'.join(config_file.split('.')[:-1])
+    if 'model_output' in config['predict']:
+        model_output = eval(config['predict']['model_output'])
+    else:
+        model_output = 0
 
     lisl.predict.predict_volume(
         model,
@@ -40,4 +44,5 @@ if __name__ == "__main__":
         out_filename,
         out_ds_names,
         checkpoint,
-        raw_normalize)
+        raw_normalize,
+        model_output)
