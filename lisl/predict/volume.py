@@ -99,7 +99,8 @@ def predict_volume(
             array_specs={
                 prediction: gp.ArraySpec(roi=raw_roi)
             },
-            checkpoint=checkpoint
+            checkpoint=checkpoint,
+            spawn_subprocess=True
         )
     )
 
@@ -137,7 +138,7 @@ def predict_volume(
             output_dir=out_dir,
             output_filename=out_filename,
             compression_type='gzip') +
-        gp.Scan(request)
+        gp.Scan(request, num_workers=4)
     )
 
     logger.info(
