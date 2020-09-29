@@ -125,7 +125,7 @@ def random_point_pairs_pipeline(
 
     # Get in and out shape
     in_shape = gp.Coordinate(model.in_shape)
-    out_shape = gp.Coordinate(model.out_shape[2:])
+    out_shape = gp.Coordinate(model.out_shape)
     is_2d = in_shape.dims() == 2
 
     emb_voxel_size = voxel_size
@@ -266,9 +266,7 @@ def random_point_pairs_pipeline(
                 emb_0: gp.ArraySpec(voxel_size=emb_voxel_size),
                 emb_1: gp.ArraySpec(voxel_size=emb_voxel_size)
             },
-            checkpoint_basename=os.path.join(
-                out_dir,
-                'checkpoint'),
+            checkpoint_basename=out_dir + '/',
             save_every=checkpoint_interval
         )
     )

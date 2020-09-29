@@ -32,7 +32,7 @@ class UNet(Model):
 
         self.dims = self.unet.dims
         self.in_shape = in_shape
-        self.out_shape = self.get_output_shape([1, 1, *self.in_shape])
+        self.out_shape = self.get_output_shape([1, 1, *self.in_shape])[2:]
         self.out_channels = num_fmaps
 
     def forward(self, x):
