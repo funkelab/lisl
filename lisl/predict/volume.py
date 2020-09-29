@@ -98,7 +98,8 @@ def predict_volume(
             },
             array_specs={
                 prediction: gp.ArraySpec(roi=raw_roi)
-            }
+            },
+            checkpoint=checkpoint
         )
     )
 
