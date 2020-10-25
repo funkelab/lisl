@@ -1,6 +1,4 @@
 import time
-import slurmexperimentmanager
-
 import os
 import torch
 from torch.nn import functional as F
@@ -9,7 +7,7 @@ from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
 from argparse import ArgumentParser
 import pytorch_lightning as pl
-from lisl.pl.trainer import CPCTrainer
+from lisl.pl.trainer import SSLTrainer
 from lisl.pl.dataset import MosaicDataModule
 from lisl.pl.utils import save_args
 from pytorch_lightning.callbacks import LearningRateLogger, ModelCheckpoint
@@ -20,7 +18,7 @@ import json
 if __name__ == '__main__':
 
     parser = ArgumentParser()
-    parser = CPCTrainer.add_model_specific_args(parser)
+    parser = SSLTrainer.add_model_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
     parser = MosaicDataModule.add_argparse_args(parser)
     parser = MosaicDataModule.add_model_specific_args(parser)
@@ -28,7 +26,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # init module
-    model = CPCTrainer.from_argparse_args(args)
+    model = SSLTrainer.from_argparse_args(args)
     datamodule = MosaicDataModule.from_argparse_args(args)
     lr_logger = LearningRateLogger()
     model_saver = ModelCheckpoint(save_last=True, save_top_k=5, save_weights_only=False, period=10)
@@ -37,6 +35,4 @@ if __name__ == '__main__':
     trainer = pl.Trainer.from_argparse_args(args)
 
     trainer.callbacks.append(lr_logger)
-    save_args(args, trainer.logger.log_dir)
-
     trainer.fit(model, datamodule)

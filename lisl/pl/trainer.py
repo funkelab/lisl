@@ -33,7 +33,7 @@ from segmentation_models_pytorch.deeplabv3.model import DeepLabV3Plus
 
 
 class SSLTrainer(pl.LightningModule):
-    def __init__(self, head_layers=4, encoder_layers=2, ndim=2, hidden_channels=64, in_channels=1, out_channels=3):
+    def __init__(self, loss_name="CPC", head_layers=4, encoder_layers=2, ndim=2, hidden_channels=64, in_channels=1, out_channels=3, initial_lr=1e-4):
         super().__init__()
 
         self.save_hyperparameters()
@@ -44,7 +44,14 @@ class SSLTrainer(pl.LightningModule):
         self.ndim = ndim
         self.last_val_log = -1
         self.head_layers = head_layers
-        
+        self.encoder_layers = encoder_layers
+        self.loss_name = loss_name
+        self.initial_lr = initial_lr
+
+        self.distance = 2
+        self.stride = 4
+        self.embed_scale = 0.1
+
         self.build_models()
 
     @staticmethod
@@ -56,6 +63,8 @@ class SSLTrainer(pl.LightningModule):
         parser.add_argument('--hidden_channels', type=int, default=64)
         parser.add_argument('--in_channels', type=int, default=1)
         parser.add_argument('--out_channels', type=int, default=3)
+        parser.add_argument('--initial_lr', type=float, default=1e-4)
+        parser.add_argument('--loss_name', type=str, default="CPC")
 
         return parser
 
@@ -98,14 +107,22 @@ class SSLTrainer(pl.LightningModule):
         self.head = MLP(self.hidden_channels, self.out_channels, n_hidden_layers=self.head_layers,
                         n_hidden=self.hidden_channels, ndim=self.ndim)
 
+        self.prediction_cnn = MLP(self.hidden_channels, self.hidden_channels,
+                                  n_hidden_layers=self.encoder_layers,
+                                  n_hidden=self.hidden_channels, ndim=2)
+        self.target_cnn = MLP(self.hidden_channels, self.hidden_channels,
+                              n_hidden_layers=self.encoder_layers,
+                              n_hidden=self.hidden_channels, ndim=2)
 
+    def loss_fn(self):
+        return getattr(self, "loss_" + self.loss_name)
 
     def training_step(self, batch, batch_nb):
         x, y = batch
 
         embedding = self.forward(x)
 
-        loss, y, y_hat = self.loss_fn(y, embedding, repeats=10)
+        loss, y, y_hat = self.loss_fn()(y, embedding)
         tensorboard_logs = {'train_loss': loss.detach()}
         tensorboard_logs['iteration'] = self.global_step
 
@@ -130,7 +147,7 @@ class SSLTrainer(pl.LightningModule):
     def validation_step(self, batch, batch_nb):
         x, y = batch
         embedding = self.forward(x)
-        loss, y, y_hat = self.loss_fn(y, embedding, repeats=10)
+        loss, y, y_hat = self.loss_fn()(y, embedding)
 
         if self.log_now(val=True):
             self.log_batch_images(x, y, y_hat, embedding, "val")
@@ -143,7 +160,7 @@ class SSLTrainer(pl.LightningModule):
         return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.00001)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.initial_lr)
         scheduler = MultiStepLR(optimizer, milestones=[4, 16, 64], gamma=0.5)
         return [optimizer], [scheduler]
 
@@ -260,80 +277,7 @@ class SSLTrainer(pl.LightningModule):
         else:
             return self.global_step % 64 == 0
 
-
-class SSLTrainerStarLoss(SSLTrainer):
-
-    def loss_fn(self, y, embedding, flipped_embedding, repeats=10):
-
-        predicted_star_distances = torch.nn.functional.softplus(self.star_head(embedding))
-
-        min_width = 10
-        shift = np.random.randint(1, 16)
-        bound = 0  # 100-shift
-
-        scale = predicted_star_distances.shape[-1]
-
-        psd_right = (predicted_star_distances[..., :-shift] * scale)
-        psd_left = (predicted_star_distances[..., shift:] * scale)
-
-        inner_right = torch.min(psd_left[:, 0] + shift, psd_right[:, 0])
-        outer_right = torch.max(psd_left[:, 0] + shift, psd_right[:, 0])
-
-        inner_left = torch.max(shift - psd_left[:, 1], - psd_right[:, 1])
-        outer_left = torch.min(shift - psd_left[:, 1], - psd_right[:, 1])
-
-        intersection = (inner_right - inner_left).abs()
-        union = (outer_right - outer_left).abs()
-
-        iou = intersection / (union + 1e-6)
-        # consitency loss
-        consitency = (4 * (-(iou - 0.5)**2 + 0.25))
-        loss = consitency.mean()
-
-        return loss, predicted_star_distances, iou[:, None]
-
-
-class CPCTrainer(SSLTrainer):
-    def __init__(self, head_layers=4, encoder_layers=2, ndim=2, hidden_channels=64, out_channels=3, in_channels=1):
-        super().__init__(head_layers=head_layers,
-                         encoder_layers=encoder_layers,
-                         ndim=ndim,
-                         hidden_channels=hidden_channels,
-                         out_channels=hidden_channels,
-                         in_channels=in_channels)
-
-        self.prediction_cnn = MLP(hidden_channels, self.hidden_channels,
-                                  n_hidden_layers=encoder_layers, n_hidden=self.hidden_channels, ndim=2)
-        self.target_cnn_down = MLP(hidden_channels, self.hidden_channels,
-                                   n_hidden_layers=encoder_layers, n_hidden=self.hidden_channels, ndim=2)
-        self.target_cnn_right = MLP(hidden_channels, self.hidden_channels,
-                                    n_hidden_layers=encoder_layers, n_hidden=self.hidden_channels, ndim=2)
-
-        self.distance = 2
-        self.stride = 4
-
-        dsf = ((3, 3), (2, 2), (2, 2))
-        ks = (((3, 3), (3, 3)),
-              ((3, 3), (3, 3)),
-              ((3, 3), (3, 3)),
-              ((3, 3), (3, 3)))
-
-        self.unet = UNet(
-            in_channels=in_channels,
-            num_fmaps_out=self.hidden_channels,
-            num_fmaps=32,
-            fmap_inc_factor=2,
-            downsample_factors=dsf,
-            kernel_size_down=ks,
-            kernel_size_up=ks,
-            activation="GELU",
-            num_heads=1,
-            constant_upsample=True,
-        )
-
-        self.embed_scale = 0.1
-
-    def loss_fn(self, y, embedding, repeats=None):
+    def loss_CPC(self, y, embedding):
 
         xrshift = random.randint(0, self.stride)
         yrshift = random.randint(0, self.stride)
@@ -341,7 +285,7 @@ class CPCTrainer(SSLTrainer):
         strided_embedding = embedding[..., xrshift::self.stride, yrshift::self.stride]
 
         preds = self.prediction_cnn(strided_embedding)
-        # targets = self.target_cnn_down(strided_embedding)
+        targets = self.target_cnn(strided_embedding)
         targets = strided_embedding
 
         b, c, h, w = targets.shape
@@ -372,3 +316,35 @@ class CPCTrainer(SSLTrainer):
         loss = nn.functional.cross_entropy(logits, labels)
 
         return loss, targets[:, :3], preds[:, :3]
+
+    def loss_stardist(self, y, embedding, flipped_embedding):
+
+        predicted_star_distances = torch.nn.functional.softplus(self.star_head(embedding))
+
+        min_width = 10
+        shift = np.random.randint(1, 16)
+        bound = 0  # 100-shift
+
+        scale = predicted_star_distances.shape[-1]
+
+        psd_right = (predicted_star_distances[..., :-shift] * scale)
+        psd_left = (predicted_star_distances[..., shift:] * scale)
+
+        inner_right = torch.min(psd_left[:, 0] + shift, psd_right[:, 0])
+        outer_right = torch.max(psd_left[:, 0] + shift, psd_right[:, 0])
+
+        inner_left = torch.max(shift - psd_left[:, 1], - psd_right[:, 1])
+        outer_left = torch.min(shift - psd_left[:, 1], - psd_right[:, 1])
+
+        intersection = (inner_right - inner_left).abs()
+        union = (outer_right - outer_left).abs()
+
+        iou = intersection / (union + 1e-6)
+        # consitency loss
+        consitency = (4 * (-(iou - 0.5)**2 + 0.25))
+        loss = consitency.mean()
+
+        return loss, predicted_star_distances, iou[:, None]
+
+
+

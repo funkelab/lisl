@@ -102,18 +102,28 @@ class InteractiveSegmentation:
         self.embedding = embedding
         self.classifier = classifier
 
-        self.dimensions = neuroglancer.CoordinateSpace(
+        self.raw_dimensions = neuroglancer.CoordinateSpace(
             names=['z', 'y', 'x'],
             units='nm',
             scales=raw.voxel_size)
 
-        print(f"Creating segmentation layer with shape {raw.shape}")
+        self.dimensions = neuroglancer.CoordinateSpace(
+            names=['c^', 'z', 'y', 'x'],
+            units=[''] + 3*['nm'],
+            scales=raw.voxel_size)
+
+        # if len(raw.shape) > 3:
+        #     volume_shape = raw.shape[1:]
+        # else:
+        volume_shape = raw.shape
+
+        print(f"Creating segmentation layer with shape {volume_shape}")
         self.segmentation = np.zeros(
-            raw.shape,
+            volume_shape,
             dtype=np.uint8)
         self.segmentation_volume = neuroglancer.LocalVolume(
             data=self.segmentation,
-            dimensions=self.dimensions)
+            dimensions=self.raw_dimensions)
 
         self.viewer = neuroglancer.Viewer()
         self.viewer.actions.add('label_fg', self._label_fg)
@@ -126,6 +136,7 @@ class InteractiveSegmentation:
             s.input_event_bindings.data_view['keyu'] = 'update_seg'
 
         with self.viewer.txn() as s:
+            
             add_layer(s, self.raw, 'raw')
             add_layer(s, self.embedding, 'embedding')
             s.layers['embedding'].visible = False
@@ -173,7 +184,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     raw = daisy.open_ds(args.raw_file, args.raw_dataset)
+    print("raw is open")
     embedding = daisy.open_ds(args.emb_file, args.emb_dataset)
+    print("embedding is open")
+    
+    print(raw.data.shape, embedding.data.shape)
 
     for a in [raw, embedding]:
         if a.roi.dims() == 2:
@@ -186,6 +201,13 @@ if __name__ == "__main__":
             print(a.roi)
             print(a.shape)
             print(a.data.shape)
+
+    # raw.shape == (92, 700, 1100)
+    # embedding.shape == (64, 92, 700, 1100)
+
+    print(embedding.roi)
+
+    print(raw.data.shape, embedding.data.shape)
 
     classifier = Classifier(embedding)
     interactive_segmentation = InteractiveSegmentation(
