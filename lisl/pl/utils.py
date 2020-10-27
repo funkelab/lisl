@@ -39,11 +39,7 @@ def is_jsonable(x):
 def save_args(args, directory):
     os.mkdir(directory)
     log_out = os.path.join(directory, "commandline_args.txt")
-    print(args.__dict__)
-
     serializable_args = {key: value for (key, value) in args.__dict__.items() if is_jsonable(value)}
-
-    print(serializable_args)
 
     with open(log_out, 'w') as f:
         json.dump(serializable_args, f, indent=2)

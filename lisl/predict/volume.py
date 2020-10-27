@@ -8,7 +8,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 def predict_volume(
         model,
         dataset,
@@ -16,8 +15,14 @@ def predict_volume(
         out_filename,
         out_ds_names,
         checkpoint,
+        input_name='raw_0',
         normalize_factor=None,
-        model_output=0):
+        model_output=0,
+        in_shape=None,
+        out_shape=None,
+        spawn_subprocess=True,
+        num_workers=0,
+        z_is_time=True):
 
     raw = gp.ArrayKey('RAW')
     prediction = gp.ArrayKey('PREDICTION')
@@ -28,10 +33,17 @@ def predict_volume(
     data_dims = len(data.shape)
 
     # Get in and out shape
-    in_shape = gp.Coordinate(model.in_shape)
-    out_shape = gp.Coordinate(model.out_shape)
+    if in_shape is None:
+        in_shape = model.in_shape
+    if out_shape is None:
+        out_shape = model.out_shape
+
+    in_shape = gp.Coordinate(in_shape)
+    out_shape = gp.Coordinate(out_shape)
     spatial_dims = in_shape.dims()
     is_2d = spatial_dims == 2
+
+    print(in_shape, out_shape, voxel_size)
 
     in_shape = in_shape * voxel_size
     out_shape = out_shape * voxel_size
@@ -68,7 +80,9 @@ def predict_volume(
 
     # 2D raw is either (n, y, x) or (c, n, y, x)
     # 3D raw is either (z, y, x) or (c, z, y, x)
-    for _ in range((2 + spatial_dims) - data_dims):
+    num_additional_channels = (2 + spatial_dims) - data_dims
+
+    for _ in range(num_additional_channels):
         source += AddChannelDim(raw)
 
     # 2D raw: (c, n, y, x)
@@ -84,25 +98,28 @@ def predict_volume(
         raw_roi = source.spec[raw].roi
         logger.info(f"raw_roi: {raw_roi}")
 
-    pipeline = (
-        source +
-        gp.Normalize(raw, factor=normalize_factor) +
-        gp.Pad(raw, context) +
-        gp.torch.Predict(
-            model,
-            inputs={
-                'raw_0': raw
-            },
-            outputs={
-                model_output: prediction
-            },
-            array_specs={
-                prediction: gp.ArraySpec(roi=raw_roi)
-            },
-            checkpoint=checkpoint,
-            spawn_subprocess=True
+    pipeline = source
+        
+    if normalize_factor != "skip":
+        pipeline = pipeline + gp.Normalize(raw, factor=normalize_factor)
+
+    pipeline = pipeline + (
+            gp.Pad(raw, context) +
+            gp.torch.Predict(
+                model,
+                inputs={
+                    input_name: raw
+                },
+                outputs={
+                    model_output: prediction
+                },
+                array_specs={
+                    prediction: gp.ArraySpec(roi=raw_roi)
+                },
+                checkpoint=checkpoint,
+                spawn_subprocess=spawn_subprocess
+            )
         )
-    )
 
     # 2D raw       : (n, c, y, x)
     # 2D prediction: (n, c, y, x)
@@ -138,7 +155,7 @@ def predict_volume(
             output_dir=out_dir,
             output_filename=out_filename,
             compression_type='gzip') +
-        gp.Scan(request, num_workers=4)
+        gp.Scan(request, num_workers=num_workers)
     )
 
     logger.info(

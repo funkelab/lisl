@@ -49,6 +49,7 @@ class SparseChannelDataset(Dataset):
     def __init__(self, filename,
                  key,
                  density=None,
+                 channels=0,
                  shape=(16, 256, 256),
                  time_window=None,
                  add_sparse_mosaic_channel=True,
@@ -61,6 +62,7 @@ class SparseChannelDataset(Dataset):
         self.raw = gp.ArrayKey('RAW_0')
         self.add_sparse_mosaic_channel = add_sparse_mosaic_channel
         self.random_rot = random_rot
+        self.channels = channels
 
         data = daisy.open_ds(filename, key)
 
@@ -93,19 +95,25 @@ class SparseChannelDataset(Dataset):
                                                           [0, math.pi / 2.0],
                                                           prob_slip=-1,
                                                           spatial_dims=2)
-
+        self.pipeline.setup()
         np.random.seed(os.getpid() + int(time.time()))
 
 
     def __getitem__(self, index):
 
         request = gp.BatchRequest()
-        request.add(self.raw, (2, 1, ) + tuple(self.shape))
-
+        if self.channels == 0:
+            request.add(self.raw, (1, ) + tuple(self.shape))
+        else:
+            request.add(self.raw, (2, 1, ) + tuple(self.shape))
+            
         # Todo: replace with self.pipeline.setup() ?
         # Todo: self.pipeline.internal_teardown()
-        with gp.build(self.pipeline):
-            out = self.pipeline.request_batch(request)[self.raw].data
+        # with gp.build(self.pipeline):
+        out = self.pipeline.request_batch(request)[self.raw].data
+
+        if self.channels == 0:
+            out = out[None]
 
         if self.density is None:
             num_samples = random.randint(10, 200)

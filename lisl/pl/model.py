@@ -259,8 +259,6 @@ class PartialConvUNet2D(UNet):
 
     def construct_downsampling_module(self, depth):
 
-        print("asdlksjd;construct_downsampling_moduleconstruct_downsampling_moduleconstruct_downsampling_moduleconstruct_downsampling_module;sdikojf;lkasjd;lfkj;sld")
-
         f_in = self.in_channels if depth == 0 else self.fmaps[depth - 1]
         f_out = self.fmaps[depth]
         kernel_size = self.encoder_kernel_size(depth)
@@ -274,8 +272,6 @@ class PartialConvUNet2D(UNet):
                                 dim=2)
 
     def construct_upsampling_module(self, depth):
-
-        print("asdlksjd;u;construct_upsampling_moduleconstruct_upsampling_moduleconstruct_upsampling_moduleconstruct_upsampling_moduleconstruct_upsampling_module;lkasjd;lfkj;sld")
 
         scale_factor = self.scale_factors[depth]
         if scale_factor[0] == 1:
