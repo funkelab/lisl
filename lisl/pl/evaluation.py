@@ -7,36 +7,24 @@ import os
 import copy
 from lisl.datasets import Dataset
 import zarr
+import numpy as np
+from sklearn.neighbors import KNeighborsClassifier
+import stardist
+from skimage import measure
+from scipy import ndimage
+from skimage.morphology import watershed
+from skimage.io import imsave
+from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
 
-# # from research_sslcell.imagetransforms import CPCTestTransformsCTC, CPCTestLabelTransformsCTC
-# from torch.nn import functional as F
-# from torch import nn
-# from PIL import Image
-
-# import pytorch_lightning as pl
-# import torch
-# import torch.optim as optim
+from PIL import Image
+import matplotlib
 
 
-# from pytorch_lightning.utilities import rank_zero_warn
+def compute_3class_segmentation(inner, background):
+    seeds = measure.label(inner, background=0)
+    distance = ndimage.distance_transform_edt(1 - background)
+    return watershed(-distance, seeds, mask=1 - background)
 
-# from pl_bolts.callbacks.self_supervised import SSLOnlineEvaluator
-# import pl_bolts
-
-# import matplotlib
-
-# from skimage.io import imsave
-# import numpy as np
-# import stardist
-# from sklearn.decomposition import PCA
-# from research_sslcell.utils import UnPatchify, adapted_rand, tozeroone
-# from skimage import measure
-# from skimage.morphology import watershed
-# from scipy import ndimage
-# import math
-# from tqdm import tqdm
-
-# from pl_bolts.losses.self_supervised_learning import CPCTask
 
 class SupervisedLinearSegmentationValidation(Callback):
 
@@ -77,104 +65,42 @@ class SupervisedLinearSegmentationValidation(Callback):
 
         return cls(**callback_kwargs)
 
-    # def log_img_and_seg(self, img, label, predictions, prefix, pl_module, predicted_labels=None, score=None, embeddings=None):
+    def log_img_and_seg(self,
+                        img,
+                        label,
+                        predictions,
+                        postfix,
+                        pl_module,
+                        eval_directory,
+                        predicted_labels=None,
+                        score=None,
+                        embeddings=None):
 
-    #     def label2color(label):
+        def log_img(name, img):
+            pl_module.logger.experiment.add_image(
+                name, img, pl_module.global_step)
+            try:
+                if img.shape[0] == 1:
+                    img = img[0]
+                if img.shape[0] in [3, 4]:
+                    img = img.transpose(1, 2, 0)
+                imsave(os.path.join(eval_directory, name+".png"),
+                       img,
+                       check_contrast=False)
+            except:
+                print("can not imsave ", img.shape)
 
-    #         if isinstance(label, Image.Image):
-    #             label = np.array(label)
-    #             if len(label.shape) == 3:
-    #                 label = label[..., 0]
+        log_img(f'img_{postfix}', vis(img))
+        log_img(f'gt_{postfix}', label2color(label))
+        log_img(f'3class_{postfix}',
+                np.stack((predictions == 0, predictions == 1, predictions == 2),
+                         axis=0).astype(np.float32))
 
-    #         cmap = matplotlib.cm.get_cmap('nipy_spectral')
-    #         shuffle_labels = np.concatenate(
-    #             ([0], np.random.permutation(label.max()) + 1))
-    #         label = shuffle_labels[label]
-    #         return cmap(label / label.max()).transpose(2, 0, 1)
+        if predicted_labels is not None:
+            log_img(f'instances_{postfix}', label2color(predicted_labels))
 
-    #     def vis(x):
-    #         if isinstance(x, Image.Image):
-    #             x = np.array(x)
-
-    #         assert(len(x.shape) in [2, 3])
-
-    #         if len(x.shape) == 2:
-    #             x = x[None]
-    #         else:
-    #             if x.shape[0] not in [1, 3]:
-    #                 if x.shape[2] in [1, 3]:
-    #                     x = x.transpose(2, 0, 1)
-    #                 else:
-    #                     raise Exception(
-    #                         "can not visualize array with shape ", x.shape)
-
-    #         return x
-
-    #     pl_module.logger.experiment.add_image(f'{prefix}_img', vis(img), pl_module.global_step)
-    #     pl_module.logger.experiment.add_image(f'{prefix}_gt', label2color(label), pl_module.global_step)
-
-    #     _, max_class = torch.max(predictions, 1)
-    #     three_class_probs = torch.nn.functional.softmax(
-    #         predictions, dim=1)
-
-    #     pl_module.logger.experiment.add_image(f'{prefix}_3class',
-    #                                           torch.stack(
-    #                                               (max_class[0] == 0, max_class[0] == 1, max_class[0] == 2), dim=0),
-    #                                           pl_module.global_step)
-    #     pl_module.logger.experiment.add_image(f'{prefix}_probs', three_class_probs[0], pl_module.global_step)
-
-    #     if predicted_labels is not None:
-    #         pl_module.logger.experiment.add_image(f'{prefix}_instances', label2color(predicted_labels), pl_module.global_step)
-
-    #     if score is not None:
-    #         pl_module.logger.log_metrics(score, step=pl_module.global_step)
-
-    #     if embeddings is not None:
-    #         _, C, W, H = embeddings.shape
-    #         pca_in = embeddings[0].detach().cpu().numpy().reshape(C, -1).T
-    #         pca = PCA(n_components=3, whiten=True)
-    #         pca_out = pca.fit_transform(pca_in).T
-    #         pca_image = pca_out.reshape(3, W, H)
-    #         pl_module.logger.experiment.add_image(f'{prefix}_PCA', pca_image, pl_module.global_step)
-    #         pl_module.logger.experiment.add_image(f'{prefix}_embedding_0_2', embeddings[0, :3], pl_module.global_step)
-
-    def compute_3class_labels(self, train_label, patch_size, device):
-
-        train_seg_gt = np.array(train_label)[..., 0]
-        train_stardist = stardist.geometry.star_dist(train_seg_gt, n_rays=32)
-
-        background = train_seg_gt == 0
-        inner = train_stardist.min(axis=-1) > 3
-        # classes 0: boundaries, 1: inner_cell, 2: background
-        threeclass = (2 * background) + inner
-
-        # remove pixels that are not the center of any patch
-        lc = (patch_size // 2)
-        rc = patch_size - lc - 1
-
-        train_seg_gt = train_seg_gt[..., lc:-rc, lc:-rc]
-        train_threeclass = threeclass[..., lc:-rc, lc:-rc]
-        train_threeclass = torch.from_numpy(
-            train_threeclass[None]).to(device)
-
-        return train_threeclass, train_seg_gt
-
-    def compute_3class_segmentation(self, predictions):
-
-        _, max_3class = torch.max(predictions, 1)
-
-        predicted_seg = []
-        inner = max_3class.cpu().numpy() == 1
-        background = max_3class.cpu().numpy() == 2
-
-        for batch in range(max_3class.shape[0]):
-
-            seeds = measure.label(inner[batch], background=0)
-            distance = ndimage.distance_transform_edt(1 - background[batch])
-            predicted_seg.append(
-                watershed(-distance, seeds, mask=1 - background[batch]))
-
-        return np.stack(predicted_seg)
+        if score is not None:
+            pl_module.logger.log_metrics(score, step=pl_module.global_step)
 
     def train_simple_model(self, embeddings, target, pl_module, number_of_iterations=2001):
 
@@ -210,7 +136,9 @@ class SupervisedLinearSegmentationValidation(Callback):
                                                       "evaluation",
                                                       f"{pl_module.global_step:08d}"))
         model_save_path = os.path.join(eval_directory, "model.torch")
-        
+        prediction_filename = os.path.join(eval_directory, "embeddings.zarr")
+        try_remove(prediction_filename)
+
         os.makedirs(eval_directory, exist_ok=True)
         torch.save(trainer.model.unet.state_dict(), model_save_path)
 
@@ -233,102 +161,64 @@ class SupervisedLinearSegmentationValidation(Callback):
                            num_workers=0,
                            z_is_time=True)
 
+        z_array = zarr.open(prediction_filename, mode="r+")
+        z_train = zarr.open(self.test_filename)
 
-        z_array = zarr.open(os.path.join((eval_directory, embeddings.zarr)))
+        embeddings = z_array['embedding'][:]
+        instance_number_array = z_train['samples'][:]
+        # This array conatins consecutive integers
+        #    (one sequence per class)
+        #    (starting at zero)
+        #    (randomly permutated)
+        labels = z_train['seg'][:].astype(np.int)
 
-        import pdb
-        pdb.set_trace()
+        for n_samples in [5, 10, 20, 50, 100, 200, 500, 1000]:
 
-        print("done")
+            train_stardist = np.stack(
+                [stardist.geometry.star_dist(l, n_rays=32) for l in labels])
+            background = labels == 0
+            inner = train_stardist.min(axis=-1) > 3
+            # classes 0: boundaries, 1: inner_cell, 2: background
+            threeclass = (2 * background) + inner
 
-        # Todo: Train MLP for (star dist, 3 class, affinity + MWS)
+            train_mask = instance_number_array <= n_samples
+            training_data = embeddings[:, train_mask].T
+            train_labels = threeclass[train_mask]
 
-        # Todod: Measure Segmentation performance
+            # foreground background
+            knn = KNeighborsClassifier(n_neighbors=3,
+                                       weights='distance',
+                                       n_jobs=-1)
 
-        return
+            knn.fit(training_data, train_labels)
 
+            test_mask = np.logical_and(instance_number_array > n_samples,
+                                       instance_number_array < instance_number_array.max())
 
-        print("segmentation inference")
+            spatial_dims = embeddings.shape[1:]
 
-        train_img, train_label, test_img, test_label = self.load_train()
+            flatt_embeddings = np.transpose(
+                embeddings.reshape((embeddings.shape[0], -1)), (1, 0))
+            prediction = knn.predict(flatt_embeddings)
+            prediction = prediction.reshape(spatial_dims)
 
-        tf = CPCTestTransformsCTC(patch_size=trainer.datamodule.patch_size,
-                                  overlap=trainer.datamodule.patch_size - 1,
-                                  image_resize_factor=trainer.datamodule.image_resize_factor,
-                                  patchify=True)
+            inner = prediction == 1
+            background = prediction == 2
 
-        ltf = CPCTestLabelTransformsCTC(patch_size=trainer.datamodule.patch_size,
-                                        overlap=trainer.datamodule.patch_size - 1,
-                                        image_resize_factor=trainer.datamodule.image_resize_factor)
+            predicted_seg = np.stack([compute_3class_segmentation(
+                i, b) for i, b in zip(inner, background)])
 
-        train_label = ltf(train_label)
-        test_label = ltf(test_label)
+            z_array.create_dataset(f"prediction_{n_samples:04d}", data=prediction, compression='gzip')
+            z_array.create_dataset(f"predicted_seg_{n_samples:04d}", data=predicted_seg, compression='gzip')
+            z_array.create_dataset(f"labels_{n_samples:04d}", data=labels, compression='gzip')
 
-        train_threeclass, _ = self.compute_3class_labels(
-            train_label, trainer.datamodule.patch_size, pl_module.device)
-        test_threeclass, gt_seg = self.compute_3class_labels(
-            test_label, trainer.datamodule.patch_size, pl_module.device)
-
-        with torch.no_grad():
-            patches = tf(train_img)
-            embeddings = pl_module.forward_memreduced(patches[None]).detach()
-
-        model, train_predictions = self.train_simple_model(
-            embeddings, train_threeclass, pl_module)
-        train_predicted_seg = self.compute_3class_segmentation(
-            train_predictions)[0]
-
-        self.log_img_and_seg(np.array(ltf(train_img)).transpose(2, 0, 1),
-                             train_label,
-                             train_predictions,
-                             "train",
-                             pl_module,
-                             predicted_labels=train_predicted_seg,
-                             embeddings=embeddings)
-
-        with torch.no_grad():
-            test_patches = tf(test_img)
-
-            # test_embeddings = pl_module(test_patches.cuda()[None])
-            test_embeddings, preds, targets = pl_module.forward_memreduced(
-                test_patches[None], return_prediction_and_target=True, )
-
-            # this is the prediction offset
-            for k, i in enumerate(range(pl_module.contrastive_task.steps_to_ignore,
-                                        pl_module.contrastive_task.steps_to_predict)):
-                c = targets.shape[1]
-                dist = i * (trainer.datamodule.patch_size -
-                            trainer.datamodule.patch_overlap) + 1
-                shifted_preds = preds[:, k*c:(k+1)*c, :-dist, :]
-                inv_shifted_target = targets[:, :, :-dist, :]
-                shifted_targets = targets[:, :, dist:, :]
-
-                sim1 = 0.5 + 0.5 * \
-                    cosine_similarity(
-                        shifted_preds, shifted_targets, dim=1, eps=1e-8)
-
-                pl_module.logger.experiment.add_image(
-                    f'cosine_similarity_d{i}', tozeroone(sim1[0, None]), pl_module.global_step)
-
-                sim2 = 0.5 + 0.5 * \
-                    cosine_similarity(inv_shifted_target,
-                                      shifted_targets, dim=1, eps=1e-8)
-
-                pl_module.logger.experiment.add_image(
-                    f'cosine_similarity_with_shifted_target_d{i}', tozeroone(sim2[0, None]), pl_module.global_step)
-
-            test_predictions = model(test_embeddings)
-            test_predicted_seg = self.compute_3class_segmentation(
-                test_predictions)[0]
-
-            arand = adapted_rand(test_predicted_seg, gt_seg,
-                                 ignore_label=True, all_stats=True)
-
-            self.log_img_and_seg(test_img,
-                                 test_label,
-                                 test_predictions,
-                                 "val",
+            seg_score = np.mean([adapted_rand(p, g)
+                                 for p, g in zip(predicted_seg, labels)])
+            self.log_img_and_seg(z_train['raw'][-1],
+                                 labels[-1],
+                                 prediction[-1],
+                                 f"test_n={n_samples:04d}",
                                  pl_module,
-                                 predicted_labels=test_predicted_seg,
-                                 score=arand,
-                                 embeddings=test_embeddings)
+                                 eval_directory,
+                                 score={f"arand_n={n_samples}": seg_score},
+                                 predicted_labels=predicted_seg[-1])
