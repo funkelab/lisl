@@ -48,8 +48,8 @@ class SSLTrainer(pl.LightningModule):
         self.loss_name = loss_name
         self.initial_lr = initial_lr
 
-        self.distance = 2
-        self.stride = 4
+        self.distance = 8
+        self.stride = 2
         self.embed_scale = 0.1
 
         self.build_models()
@@ -188,7 +188,6 @@ class SSLTrainer(pl.LightningModule):
     def log_batch_images(self, x, y, y_hat, embedding, prefix):
 
         with torch.no_grad():
-
             x_0 = x[0].detach().cpu()
             c = 0
             x_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(x_0[c])) for c in range(
@@ -222,7 +221,8 @@ class SSLTrainer(pl.LightningModule):
             if y.shape[-1] == x.shape[-1] and x.shape[-1] == y_hat.shape[-1]:
                 cat_batch = torch.cat(tuple(
                     torch.cat(tuple(vis(self.squeeze(x_0[c])) for c in range(x_0.shape[0])) +
-                              tuple(vis(self.squeeze(y_0[c])) for c in range(y_0.shape[0]))
+                              tuple(vis(self.squeeze(y_0[c]))
+                                    for c in range(y_0.shape[0]))
                               + tuple(vis(self.squeeze(y_hat_0[c])) for c in range(y_hat_0.shape[0])), dim=1) for x_0, y_0, y_hat_0 in zip(x.detach().cpu(), y.detach().cpu(), y_hat.detach().cpu())), dim=2)
                 self.logger.experiment.add_image(f'{prefix}_batch', cat_batch, self.global_step)
 
@@ -282,7 +282,8 @@ class SSLTrainer(pl.LightningModule):
         xrshift = random.randint(0, self.stride)
         yrshift = random.randint(0, self.stride)
 
-        strided_embedding = embedding[..., xrshift::self.stride, yrshift::self.stride]
+        strided_embedding = embedding[...,
+                                      xrshift::self.stride, yrshift::self.stride]
 
         preds = self.prediction_cnn(strided_embedding)
         targets = self.target_cnn(strided_embedding)
@@ -291,7 +292,8 @@ class SSLTrainer(pl.LightningModule):
         b, c, h, w = targets.shape
         # (b, c, h, w) -> (num_vectors, emb_dim)
         # every vector (c-dim) is a target
-        targets_perm = targets.permute(0, 2, 3, 1).contiguous().reshape([-1, c])
+        targets_perm = targets.permute(
+            0, 2, 3, 1).contiguous().reshape([-1, c])
 
         # select the future (south) targets to predict
         # selects all of the ones south of the current source
@@ -317,9 +319,84 @@ class SSLTrainer(pl.LightningModule):
 
         return loss, targets[:, :3], preds[:, :3]
 
+    def loss_CPCshift(self, y, embedding, offsets):
+
+        xrshift = random.randint(0, self.stride)
+        yrshift = random.randint(0, self.stride)
+
+        strided_embedding = embedding[...,
+                                      xrshift::self.stride, yrshift::self.stride]
+
+        preds = self.prediction_cnn(strided_embedding)
+        targets = self.target_cnn(strided_embedding)
+        targets = strided_embedding
+
+        b, c, h, w = targets.shape
+        # (b, c, h, w) -> (num_vectors, emb_dim)
+        # every vector (c-dim) is a target
+        targets_perm = targets.permute(
+            0, 2, 3, 1).contiguous().reshape([-1, c])
+
+        # select the future (south) targets to predict
+        # selects all of the ones south of the current source
+        preds_i = preds * self.embed_scale
+
+        # (b, c, h, w) -> (b*w*h, c) (all features)
+        # this ordering matches the targets
+        preds_i = preds_i.permute(
+            0, 2, 3, 1).contiguous().reshape([-1, c])
+
+        # calculate the strength scores
+        logits = torch.matmul(preds_i, targets_perm.transpose(-1, -2))
+
+        # generate the labels
+        n = b * h * w
+
+        # batch number
+        b1 = (torch.arange(n) // (h * w)).long()
+        # column number
+        c1 = ((torch.arange(n) // w) % (h)).long()
+        # row number
+        r1 = (torch.arange(n) % w).long()
+
+        x_offset, y_offset = offsets
+
+        coordinate = ((b1 * h + c1) * w) + r1
+        labels = coordinate + x_offset + (y_offset * w)
+
+        # check that coordinate + x_offset is within bounds
+        labels[r1 + x_offset < 0] = -100
+        labels[r1 + x_offset >= w] = -100
+        # check that coordinate + y_offset is within bounds
+        labels[c1 + y_offset < 0] = -100
+        labels[c1 + y_offset >= h] = -100
+
+        labels = labels.to(logits.device)
+        loss = nn.functional.cross_entropy(logits, labels, ignore_index=-100)
+
+        return loss, targets[:, :3], preds[:, :3]
+
+    def loss_CPCrandomshift(self, y, embedding):
+
+        angle = 2 * np.pi * np.random.random()
+        x_offset = int(self.distance * np.sin(angle))
+        y_offset = int(self.distance * np.cos(angle))
+        offsets = (x_offset, y_offset)
+
+        return self.loss_CPCshift(y, embedding, offsets)
+
+    def loss_CPCfixedshift(self, y, embedding):
+
+        x_offset = 0
+        y_offset = self.distance
+        offsets = (x_offset, y_offset)
+
+        return self.loss_CPCshift(y, embedding, offsets)
+
     def loss_stardist(self, y, embedding, flipped_embedding):
 
-        predicted_star_distances = torch.nn.functional.softplus(self.star_head(embedding))
+        predicted_star_distances = torch.nn.functional.softplus(
+            self.star_head(embedding))
 
         min_width = 10
         shift = np.random.randint(1, 16)
@@ -345,6 +422,3 @@ class SSLTrainer(pl.LightningModule):
         loss = consitency.mean()
 
         return loss, predicted_star_distances, iou[:, None]
-
-
-

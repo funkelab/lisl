@@ -15,6 +15,7 @@ from scipy import ndimage
 from skimage.morphology import watershed
 from skimage.io import imsave
 from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
+from ctcmetrics.seg import seg_metric
 
 from PIL import Image
 import matplotlib
@@ -137,6 +138,7 @@ class SupervisedLinearSegmentationValidation(Callback):
                                                       f"{pl_module.global_step:08d}"))
         model_save_path = os.path.join(eval_directory, "model.torch")
         prediction_filename = os.path.join(eval_directory, "embeddings.zarr")
+        score_filename = os.path.join(eval_directory, "score.csv")
         try_remove(prediction_filename)
 
         os.makedirs(eval_directory, exist_ok=True)
@@ -172,53 +174,61 @@ class SupervisedLinearSegmentationValidation(Callback):
         #    (randomly permutated)
         labels = z_train['seg'][:].astype(np.int)
 
-        for n_samples in [5, 10, 20, 50, 100, 200, 500, 1000]:
+        with open(score_filename, "w") as scf:
 
-            train_stardist = np.stack(
-                [stardist.geometry.star_dist(l, n_rays=32) for l in labels])
-            background = labels == 0
-            inner = train_stardist.min(axis=-1) > 3
-            # classes 0: boundaries, 1: inner_cell, 2: background
-            threeclass = (2 * background) + inner
+            for n_samples in [5, 10, 20, 50, 100, 200, 500, 1000]:
 
-            train_mask = instance_number_array <= n_samples
-            training_data = embeddings[:, train_mask].T
-            train_labels = threeclass[train_mask]
+                train_stardist = np.stack(
+                    [stardist.geometry.star_dist(l, n_rays=32) for l in labels])
+                background = labels == 0
+                inner = train_stardist.min(axis=-1) > 3
+                # classes 0: boundaries, 1: inner_cell, 2: background
+                threeclass = (2 * background) + inner
 
-            # foreground background
-            knn = KNeighborsClassifier(n_neighbors=3,
-                                       weights='distance',
-                                       n_jobs=-1)
+                train_mask = instance_number_array <= n_samples
+                training_data = embeddings[:, train_mask].T
+                train_labels = threeclass[train_mask]
 
-            knn.fit(training_data, train_labels)
+                # foreground background
+                knn = KNeighborsClassifier(n_neighbors=3,
+                                           weights='distance',
+                                           n_jobs=-1)
 
-            test_mask = np.logical_and(instance_number_array > n_samples,
-                                       instance_number_array < instance_number_array.max())
+                knn.fit(training_data, train_labels)
 
-            spatial_dims = embeddings.shape[1:]
+                test_mask = np.logical_and(instance_number_array > n_samples,
+                                           instance_number_array < instance_number_array.max())
 
-            flatt_embeddings = np.transpose(
-                embeddings.reshape((embeddings.shape[0], -1)), (1, 0))
-            prediction = knn.predict(flatt_embeddings)
-            prediction = prediction.reshape(spatial_dims)
+                spatial_dims = embeddings.shape[1:]
 
-            inner = prediction == 1
-            background = prediction == 2
+                flatt_embeddings = np.transpose(
+                    embeddings.reshape((embeddings.shape[0], -1)), (1, 0))
+                prediction = knn.predict(flatt_embeddings)
+                prediction = prediction.reshape(spatial_dims)
 
-            predicted_seg = np.stack([compute_3class_segmentation(
-                i, b) for i, b in zip(inner, background)])
+                inner = prediction == 1
+                background = prediction == 2
 
-            z_array.create_dataset(f"prediction_{n_samples:04d}", data=prediction, compression='gzip')
-            z_array.create_dataset(f"predicted_seg_{n_samples:04d}", data=predicted_seg, compression='gzip')
-            z_array.create_dataset(f"labels_{n_samples:04d}", data=labels, compression='gzip')
+                predicted_seg = np.stack([compute_3class_segmentation(
+                    i, b) for i, b in zip(inner, background)])
 
-            seg_score = np.mean([adapted_rand(p, g)
-                                 for p, g in zip(predicted_seg, labels)])
-            self.log_img_and_seg(z_train['raw'][-1],
-                                 labels[-1],
-                                 prediction[-1],
-                                 f"test_n={n_samples:04d}",
-                                 pl_module,
-                                 eval_directory,
-                                 score={f"arand_n={n_samples}": seg_score},
-                                 predicted_labels=predicted_seg[-1])
+                z_array.create_dataset(f"prediction_{n_samples:04d}", data=prediction, compression='gzip')
+                z_array.create_dataset(f"predicted_seg_{n_samples:04d}", data=predicted_seg, compression='gzip')
+                z_array.create_dataset(f"labels_{n_samples:04d}", data=labels, compression='gzip')
+
+                arand_score = np.mean([adapted_rand(p, g)
+                                     for p, g in zip(predicted_seg, labels)])
+                seg_score = np.mean([seg_metric(p, g)
+                                     for p, g in zip(predicted_seg, labels)])
+
+                scf.write(f"{n_samples},{seg_score},{arand_score}\n")
+
+                self.log_img_and_seg(z_train['raw'][-1],
+                                     labels[-1],
+                                     prediction[-1],
+                                     f"test_n={n_samples:04d}",
+                                     pl_module,
+                                     eval_directory,
+                                     score={f"arand_n={n_samples}": arand_score,
+                                            f"seg_n={n_samples}": seg_score},
+                                     predicted_labels=predicted_seg[-1])

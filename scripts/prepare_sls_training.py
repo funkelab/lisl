@@ -17,9 +17,9 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for loss in ["CPC"]:
+    for loss in ["CPCrandomshift", "CPCfixedshift"]:
 
-        for lr in [1e-3, 5e-4, 2e-4, 1e-4, 5e-5, 2e-5, 1e-5, 5e-6]:
+        for lr in [1e-3, 5e-4, 1e-4, 1e-5]:
 
             options.args =  options.args + f" --loss_name {loss}" + f" --initial_lr {lr}"
 
