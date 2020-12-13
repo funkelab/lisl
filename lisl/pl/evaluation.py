@@ -16,6 +16,7 @@ from skimage.morphology import watershed
 from skimage.io import imsave
 from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
 from ctcmetrics.seg import seg_metric
+from sklearn.decomposition import PCA
 
 from PIL import Image
 import matplotlib
@@ -103,6 +104,18 @@ class SupervisedLinearSegmentationValidation(Callback):
         if score is not None:
             pl_module.logger.log_metrics(score, step=pl_module.global_step)
 
+        if embeddings is not None:
+            _, C, W, H = embeddings.shape
+
+            pca_in = embeddings[0].reshape(C, -1).T
+            pca = PCA(n_components=3, whiten=True)
+            pca_out = pca.fit_transform(pca_in).T
+            pca_image = pca_out.reshape(3, W, H)
+
+            log_img(f'PCA', pca_image)
+            log_img(f'embedding_0_2', embeddings[0, :3])
+
+
     def train_simple_model(self, embeddings, target, pl_module, number_of_iterations=2001):
 
         model = MLP(embeddings.shape[1], 3).to(embeddings.device)
@@ -148,6 +161,7 @@ class SupervisedLinearSegmentationValidation(Callback):
 
         with torch.no_grad():
             model = trainer.model.unet.eval()
+
             predict_volume(model,
                            dataset,
                            eval_directory,
@@ -212,6 +226,7 @@ class SupervisedLinearSegmentationValidation(Callback):
                 predicted_seg = np.stack([compute_3class_segmentation(
                     i, b) for i, b in zip(inner, background)])
 
+
                 z_array.create_dataset(f"prediction_{n_samples:04d}", data=prediction, compression='gzip')
                 z_array.create_dataset(f"predicted_seg_{n_samples:04d}", data=predicted_seg, compression='gzip')
                 z_array.create_dataset(f"labels_{n_samples:04d}", data=labels, compression='gzip')
@@ -231,4 +246,5 @@ class SupervisedLinearSegmentationValidation(Callback):
                                      eval_directory,
                                      score={f"arand_n={n_samples}": arand_score,
                                             f"seg_n={n_samples}": seg_score},
-                                     predicted_labels=predicted_seg[-1])
+                                     predicted_labels=predicted_seg[-1],
+                                     embeddings=embeddings)

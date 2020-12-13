@@ -1,10 +1,27 @@
 from PIL import Image
+from gunpowder.batch_request import BatchRequest
 import torch
 import json
 import os
 import numpy as np
 import scipy.sparse as sparse
+import gunpowder as gp
 import matplotlib
+import random
+
+def offset_slice(offset, reverse=False, extra_dims=0):
+    def shift(o):
+        if o == 0:
+            return slice(None)
+        elif o > 0:
+            return slice(o, None)
+        else:
+            return slice(0, o)
+    if not reverse:
+        return (slice(None),) * extra_dims + tuple(shift(int(o)) for o in offset)
+    else:
+        return (slice(None),) * extra_dims + tuple(shift(-int(o)) for o in offset)
+
 
 def label2color(label):
 
@@ -158,6 +175,21 @@ def adapted_rand(seg, gt, all_stats=False, ignore_label=True):
         return are
 
 
+
+def offset_from_direction(direction, max_direction=8., distance=10):
+    angle = (direction / max_direction)
+    angle = 2 * np.pi * angle
+
+    x_offset = int(distance * np.sin(angle))
+    y_offset = int(distance * np.cos(angle))
+
+    x_offset += random.randint(-int(0.15 * distance),
+                               +int(0.15 * distance))
+    y_offset += random.randint(-int(0.15 * distance),
+                               +int(0.15 * distance))
+
+    return x_offset, y_offset
+
 #  gradient vis funtion
 
 # if y_hat.requires_grad:
@@ -168,3 +200,88 @@ def adapted_rand(seg, gt, all_stats=False, ignore_label=True):
 #         handle.remove()
 
 #     handle = y_hat.register_hook(log_hook)
+
+import scipy
+import numbers
+from skimage.transform import rescale
+
+class UpSample(gp.nodes.BatchFilter):
+
+    def __init__(self, source, factor, target):
+
+        assert isinstance(source, gp.ArrayKey)
+        assert isinstance(target, gp.ArrayKey)
+        assert (
+            isinstance(factor, numbers.Number) or isinstance(factor, tuple)), (
+            "Scaling factor should be a number or a tuple of numbers.")
+
+        self.source = source
+        self.factor = factor
+        self.target = target
+
+    def setup(self):
+
+        spec = self.spec[self.source].copy()
+        spec.roi = spec.roi * self.factor
+        self.provides(self.target, spec)
+        self.enable_autoskip()
+
+    def prepare(self, request):
+
+        deps = gp.BatchRequest()
+        sdep = request[self.target]
+        sdep.roi = sdep.roi / self.factor
+        deps[self.source] = sdep
+        return deps
+
+    def process(self, batch, request):
+        outputs = gp.Batch()
+
+        # logger.debug("upsampeling %s with %s", self.source, self.factor)
+
+        # resize
+        data = batch.arrays[self.source].data
+        data = rescale(data, self.factor)
+
+        # create output array
+        spec = self.spec[self.target].copy()
+        spec.roi = request[self.target].roi
+        outputs.arrays[self.target] = gp.Array(data, spec)
+        
+        return outputs
+
+
+class AbsolutIntensityAugment(gp.nodes.BatchFilter):
+
+    def __init__(self, array, scale_min, scale_max, shift_min, shift_max):
+        self.array = array
+        self.scale_min = scale_min
+        self.scale_max = scale_max
+        self.shift_min = shift_min
+        self.shift_max = shift_max
+
+    def setup(self):
+        self.enable_autoskip()
+        self.updates(self.array, self.spec[self.array])
+
+    def prepare(self, request):
+        deps = BatchRequest()
+        deps[self.array] = request[self.array].copy()
+        return deps
+
+    def process(self, batch, request):
+
+        raw = batch.arrays[self.array]
+
+        raw.data = self.__augment(raw.data,
+                np.random.uniform(low=self.scale_min, high=self.scale_max),
+                np.random.uniform(low=self.shift_min, high=self.shift_max))
+
+        # clip values, we might have pushed them out of [0,1]
+        raw.data[raw.data>1] = 1
+        raw.data[raw.data<0] = 0
+
+    def __augment(self, a, scale, shift):
+
+        return a*scale + shift
+

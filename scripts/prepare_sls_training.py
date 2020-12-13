@@ -17,20 +17,22 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for loss in ["CPCrandomshift", "CPCfixedshift"]:
+    for loss in ["spatialconsensus"]:
 
-        for lr in [1e-3, 5e-4, 1e-4, 1e-5]:
+        for lr in [1e-4, 1e-5]:
 
-            options.args =  options.args + f" --loss_name {loss}" + f" --initial_lr {lr}"
+            for distance in [2, 4, 8, 16]:
 
-            set_up_experiment(options.base_dir,
-                              options.pybin,
-                              options.experiment_library,
-                              options.script,
-                              options.experiment,
-                              experiment_number,
-                              options.cleanup,
-                              options.args)
+              options.args =  options.args + f" --loss_name {loss}" + f" --initial_lr {lr} --distance {distance}"
 
-            experiment_number += 1
+              set_up_experiment(options.base_dir,
+                                options.pybin,
+                                options.experiment_library,
+                                options.script,
+                                options.experiment,
+                                experiment_number,
+                                options.cleanup,
+                                options.args)
+
+              experiment_number += 1
 

@@ -7,8 +7,8 @@ from torchvision.datasets import MNIST
 import torchvision.transforms as transforms
 from argparse import ArgumentParser
 import pytorch_lightning as pl
-from lisl.pl.trainer import SSLTrainer
-from lisl.pl.dataset import MosaicDataModule
+from lisl.pl.trainer import SSLTrainer, ContextPredictionTrainer
+from lisl.pl.dataset import MosaicDataModule, SSLDataModule
 from lisl.pl.utils import save_args
 from lisl.pl.evaluation import SupervisedLinearSegmentationValidation
 
@@ -20,17 +20,17 @@ import json
 if __name__ == '__main__':
 
     parser = ArgumentParser()
-    parser = SSLTrainer.add_model_specific_args(parser)
+    parser = ContextPredictionTrainer.add_model_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
-    parser = MosaicDataModule.add_argparse_args(parser)
-    parser = MosaicDataModule.add_model_specific_args(parser)
+    parser = SSLDataModule.add_argparse_args(parser)
+    parser = SSLDataModule.add_model_specific_args(parser)
     parser = SupervisedLinearSegmentationValidation.add_model_specific_args(parser)
 
     args = parser.parse_args()
 
     # init module
-    model = SSLTrainer.from_argparse_args(args)
-    datamodule = MosaicDataModule.from_argparse_args(args)
+    model = ContextPredictionTrainer.from_argparse_args(args)
+    datamodule = SSLDataModule.from_argparse_args(args)
     ssl_test_acc = SupervisedLinearSegmentationValidation.from_argparse_args(args)
     lr_logger = LearningRateLogger()
     model_saver = ModelCheckpoint(save_last=True, save_top_k=5, save_weights_only=False, period=10)

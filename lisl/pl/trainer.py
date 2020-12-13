@@ -20,6 +20,7 @@ from radam import RAdam
 from lisl.pl.dataset import MosaicDataModule
 import time
 import numpy as np
+from skimage.io import imsave
 
 import functools
 import inspect
@@ -27,13 +28,22 @@ import inspect
 # from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
 from torch.optim.lr_scheduler import MultiStepLR
-from lisl.pl.utils import vis
+from lisl.pl.utils import vis, offset_slice, label2color
 
-from segmentation_models_pytorch.deeplabv3.model import DeepLabV3Plus
+# from segmentation_models_pytorch.deeplabv3.model import DeepLabV3Plus
 
 
 class SSLTrainer(pl.LightningModule):
-    def __init__(self, loss_name="CPC", head_layers=4, encoder_layers=2, ndim=2, hidden_channels=64, in_channels=1, out_channels=3, initial_lr=1e-4):
+    def __init__(self, loss_name="CPC",
+                       distance=8,
+                       head_layers=4,
+                       encoder_layers=2,
+                       ndim=2,
+                       hidden_channels=64,
+                       in_channels=1,
+                       out_channels=3,
+                       stride=2,
+                       initial_lr=1e-4):
         super().__init__()
 
         self.save_hyperparameters()
@@ -48,8 +58,8 @@ class SSLTrainer(pl.LightningModule):
         self.loss_name = loss_name
         self.initial_lr = initial_lr
 
-        self.distance = 8
-        self.stride = 2
+        self.distance = distance
+        self.stride = stride
         self.embed_scale = 0.1
 
         self.build_models()
@@ -61,6 +71,7 @@ class SSLTrainer(pl.LightningModule):
         parser.add_argument('--encoder_layers', default=2, type=int)
         parser.add_argument('--ndim', type=int, default=2)
         parser.add_argument('--hidden_channels', type=int, default=64)
+        parser.add_argument('--distance', type=int, default=8)
         parser.add_argument('--in_channels', type=int, default=1)
         parser.add_argument('--out_channels', type=int, default=3)
         parser.add_argument('--initial_lr', type=float, default=1e-4)
@@ -154,10 +165,10 @@ class SSLTrainer(pl.LightningModule):
 
         return {'val_loss': loss}
 
-    def validation_end(self, outputs):
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        tensorboard_logs = {'val_loss': avg_loss}
-        return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
+    # def validation_end(self, outputs):
+    #     avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+    #     tensorboard_logs = {'val_loss': avg_loss}
+    #     return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.initial_lr)
@@ -279,11 +290,14 @@ class SSLTrainer(pl.LightningModule):
 
     def loss_CPC(self, y, embedding):
 
-        xrshift = random.randint(0, self.stride)
-        yrshift = random.randint(0, self.stride)
+        if self.stride > 0:
+            xrshift = random.randint(0, self.stride)
+            yrshift = random.randint(0, self.stride)
 
-        strided_embedding = embedding[...,
-                                      xrshift::self.stride, yrshift::self.stride]
+            strided_embedding = embedding[...,
+                                          xrshift::self.stride, yrshift::self.stride]
+        else:
+            strided_embedding = embedding
 
         preds = self.prediction_cnn(strided_embedding)
         targets = self.target_cnn(strided_embedding)
@@ -321,15 +335,19 @@ class SSLTrainer(pl.LightningModule):
 
     def loss_CPCshift(self, y, embedding, offsets):
 
-        xrshift = random.randint(0, self.stride)
-        yrshift = random.randint(0, self.stride)
 
-        strided_embedding = embedding[...,
-                                      xrshift::self.stride, yrshift::self.stride]
+        if self.stride > 0:
+            xrshift = random.randint(0, self.stride)
+            yrshift = random.randint(0, self.stride)
+            strided_embedding = embedding[...,
+                                          xrshift::self.stride, yrshift::self.stride]
+        else:
+            strided_embedding = embedding
 
         preds = self.prediction_cnn(strided_embedding)
+        # preds = strided_embedding
         targets = self.target_cnn(strided_embedding)
-        targets = strided_embedding
+        # targets = strided_embedding.detach()
 
         b, c, h, w = targets.shape
         # (b, c, h, w) -> (num_vectors, emb_dim)
@@ -370,6 +388,13 @@ class SSLTrainer(pl.LightningModule):
         # check that coordinate + y_offset is within bounds
         labels[c1 + y_offset < 0] = -100
         labels[c1 + y_offset >= h] = -100
+
+        # # check that coordinate + x_offset is within bounds
+        # labels[r1 - abs(x_offset) < 0] = -100
+        # labels[r1 + abs(x_offset) >= w] = -100
+        # # check that coordinate + y_offset is within bounds
+        # labels[c1 - abs(y_offset) < 0] = -100
+        # labels[c1 + abs(y_offset) >= h] = -100
 
         labels = labels.to(logits.device)
         loss = nn.functional.cross_entropy(logits, labels, ignore_index=-100)
@@ -422,3 +447,124 @@ class SSLTrainer(pl.LightningModule):
         loss = consitency.mean()
 
         return loss, predicted_star_distances, iou[:, None]
+
+    def loss_spatialconsensus(self, y, embedding):
+
+        angle = 2 * np.pi * np.random.random()
+        x_offset = int(self.distance * np.sin(angle))
+        y_offset = int(self.distance * np.cos(angle))
+        
+        shift = embedding.new([[x_offset, y_offset , 0]])[..., None, None]
+        offset = (x_offset, y_offset)
+
+        e = embedding[offset_slice(offset, reverse=False, extra_dims=2)]
+        eshifted = embedding[offset_slice(offset, reverse=True, extra_dims=2)]
+        eshifted = e + shift
+
+        loss = ((e - eshifted)**2).mean()
+        loss = loss + 0.000001 * embedding.mean()
+
+        return loss, e, eshifted
+
+
+
+class ContextPredictionTrainer(SSLTrainer):
+
+
+    def build_models(self):
+
+        super().build_models()
+        
+        # Todo: Could be exposed as parameter
+        self.max_directions = 8
+
+        self.context_mlp = MLP(2*self.hidden_channels, self.max_directions,
+                              n_hidden_layers=self.encoder_layers,
+                              n_hidden=self.hidden_channels, ndim=2)
+
+    def training_step(self, batch, batch_nb):
+        x, y = batch
+
+        c_split = x.shape[1] // 2
+        assert(c_split > 0)
+
+        embedding = self.forward(x[:, :c_split])
+        embedding_shift = self.forward(x[:, c_split:])
+
+        stacked_emb = torch.cat((embedding, embedding_shift), dim=1)
+        context_pred = self.context_mlp(stacked_emb)
+
+        expand_y = y[:, None, None].expand(y.shape[0], context_pred.shape[-2], context_pred.shape[-1])
+        loss = nn.functional.cross_entropy(context_pred, expand_y, ignore_index=-100)
+
+        tensorboard_logs = {'train_loss': loss.detach().cpu()}
+        tensorboard_logs['iteration'] = self.global_step
+
+        if self.log_now():
+            self.logger.experiment.add_histogram(
+                "target_hist", y.detach().cpu(), self.global_step)
+            self.logger.experiment.add_histogram(
+                "embedding_hist", embedding[..., ::3, ::11, ::11].detach().cpu(), self.global_step)
+            
+            embedding_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(torch.cat((e_0[c], e_s[c]), dim=-1))) for c in range(
+                e_0.shape[0])), dim=1) for e_0, e_s in zip(embedding.detach().cpu(), embedding_shift.detach().cpu())), dim=-1)
+            # embedding_batch_shift = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(e_0[c])) for c in range(
+            #     e_0.shape[0])), dim=1) for e_0 in embedding_shift.detach().cpu()), dim=-1)
+            # embedding_batch = torch.cat((embedding_batch, embedding_batch_shift), dim=-1)
+
+            self.logger.experiment.add_image(f'embedding', embedding_batch, self.global_step)
+
+            img_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(torch.cat((x_0[c], x_s[c]), dim=-1))) for c in range(
+                x_0.shape[0])), dim=1) for x_0, x_s in zip(x[:, :c_split].detach().cpu(), x[:, c_split:].detach().cpu())), dim=-1)
+            self.logger.experiment.add_image(f'img', img_batch, self.global_step)
+            # embedding_batch_shift = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(e_0[c])) for c in range(
+            #     e_0.shape[0])), dim=1) for e_0 in embedding_shift.detach().cpu()), dim=-1)
+            # embedding_batch = torch.cat((embedding_batch, embedding_batch_shift), dim=-1)
+
+            vis_labels = tuple(label2color(_) for _ in context_pred.detach().argmax(dim=1).cpu().numpy())
+            vis_labels = np.concatenate(vis_labels, axis=-1)
+            self.logger.experiment.add_image(f'argmax_prediction', vis_labels, self.global_step)
+
+            vis_probs = tuple(context_pred[b].detach().cpu().softmax(dim=0)[y[b]].numpy() for b in range(context_pred.shape[0]))
+            vis_probs = np.concatenate(vis_labels, axis=-1)
+            self.logger.experiment.add_image(f'vis_probs', vis_probs[None], self.global_step)
+
+        return {'loss': loss, 'log': tensorboard_logs}
+
+    def validation_step(self, batch, batch_nb):
+        x, y = batch
+
+        c_split = x.shape[1] // 2
+        assert(c_split > 0)
+
+        embedding = self.forward(x[:, :c_split])
+        embedding_shift = self.forward(x[:, c_split:])
+
+        stacked_emb = torch.cat((embedding, embedding_shift), dim=1)
+        context_pred = self.context_mlp(stacked_emb)
+
+        expand_y = y[:, None, None].expand(y.shape[0], context_pred.shape[-2], context_pred.shape[-1])
+        loss = nn.functional.cross_entropy(context_pred, expand_y, ignore_index=-100)
+
+        tensorboard_logs = {'val_loss': loss.detach()}
+        tensorboard_logs['iteration'] = self.global_step
+
+        return {'val_loss': loss}
+
+
+    def loss_context_prediction(self, y, embedding):
+
+        direction = random.randint(0, 8)
+        x_offset, y_offset = offset_from_direction
+        
+        shift = embedding.new([[x_offset, y_offset , 0]])[..., None, None]
+        offset = (x_offset, y_offset)
+
+        e = embedding[offset_slice(offset, reverse=False, extra_dims=2)]
+        eshifted = embedding[offset_slice(offset, reverse=True, extra_dims=2)]
+        eshifted = e + shift
+
+        loss = ((e - eshifted)**2).mean()
+        loss = loss + 0.000001 * embedding.mean()
+
+        return loss, e, eshifted
