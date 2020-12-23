@@ -17,6 +17,72 @@ from test_tube import HyperOptArgumentParser
 import json
 # pl.seed_everything(123)
 
+from pytorch_lightning.callbacks import Callback
+from time import time
+
+class Timing(Callback):
+
+    def setup(self, trainer, pl_module, stage: str):
+        """Called when fit or test begins"""
+        self.last_state = None
+        self.last_time  = None
+
+    def teardown(self, trainer, pl_module, stage: str):
+        """Called when fit or test ends"""
+        pass        
+
+    def on_train_batch_start(self, trainer, pl_module, *args):
+        """Called when the train batch begins."""
+        newtime = time()
+        if self.last_state is not None:
+            timediff = newtime - self.last_time
+            pl_module.logger.log_metrics({f"{self.last_state}_to_train_batch_start": timediff}, step=pl_module.global_step)
+            
+        self.last_time = newtime
+        self.last_state = "train_batch_start"
+
+    def on_train_batch_end(self, trainer, pl_module, *args):
+        """Called when the train batch ends."""
+        newtime = time()
+        if self.last_state is not None:
+            timediff = newtime - self.last_time
+            pl_module.logger.log_metrics({f"{self.last_state}_to_train_batch_end": timediff}, step=pl_module.global_step)
+            
+        self.last_time = newtime
+        self.last_state = "train_batch_end"
+
+    def on_train_epoch_start(self, trainer, pl_module, *args):
+        """Called when the train epoch begins."""
+        newtime = time()
+        if self.last_state is not None:
+            timediff = newtime - self.last_time
+            pl_module.logger.log_metrics({f"{self.last_state}_to_train_epoch_start": timediff}, step=pl_module.global_step)
+            
+        self.last_time = newtime
+        self.last_state = "train_epoch_start"
+
+    def on_train_epoch_end(self, trainer, pl_module, *args):
+        """Called when the train epoch ends."""
+        newtime = time()
+        if self.last_state is not None:
+            timediff = newtime - self.last_time
+            pl_module.logger.log_metrics({f"{self.last_state}_to_train_epoch_end": timediff}, step=pl_module.global_step)
+            
+        self.last_time = newtime
+        self.last_state = "train_epoch_end"
+
+
+    def on_batch_end(self, trainer, pl_module, *args):
+        """Called when the training batch ends."""
+        newtime = time()
+        if self.last_state is not None:
+            timediff = newtime - self.last_time
+            pl_module.logger.log_metrics({f"{self.last_state}_to_batch_end": timediff}, step=pl_module.global_step)
+            
+        self.last_time = newtime
+        self.last_state = "batch_end"
+
+
 if __name__ == '__main__':
 
     parser = ArgumentParser()
@@ -33,6 +99,7 @@ if __name__ == '__main__':
     datamodule = SSLDataModule.from_argparse_args(args)
     ssl_test_acc = SupervisedLinearSegmentationValidation.from_argparse_args(args)
     lr_logger = LearningRateLogger()
+    timer = Timing()
     model_saver = ModelCheckpoint(save_last=True, save_top_k=5, save_weights_only=False, period=10)
 
     #  init trainer
@@ -40,4 +107,5 @@ if __name__ == '__main__':
 
     trainer.callbacks.append(ssl_test_acc)
     trainer.callbacks.append(lr_logger)
+    trainer.callbacks.append(timer)
     trainer.fit(model, datamodule)

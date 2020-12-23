@@ -30,10 +30,14 @@ def compute_3class_segmentation(inner, background):
 
 class SupervisedLinearSegmentationValidation(Callback):
 
-    def __init__(self, test_ds_filename, test_ds_name_raw, test_ds_name_seg):
+    def __init__(self, test_ds_filename, test_ds_name_raw, test_ds_name_seg, test_out_shape, test_input_name):
         self.test_filename = test_ds_filename
         self.test_ds_name_raw = test_ds_name_raw
         self.test_ds_name_seg = test_ds_name_seg
+
+        self.test_out_shape = test_out_shape
+        self.test_input_name = test_input_name
+
         super().__init__()
 
     @staticmethod
@@ -43,6 +47,9 @@ class SupervisedLinearSegmentationValidation(Callback):
         parser.add_argument('--test_ds_filename', type=str)
         parser.add_argument('--test_ds_name_raw', type=str)
         parser.add_argument('--test_ds_name_seg', type=str)
+        parser.add_argument('--test_out_shape', nargs='*', default=(120, 120))
+        parser.add_argument('--test_input_name', type=str, default="x")
+
         return parser
 
     @classmethod
@@ -167,12 +174,12 @@ class SupervisedLinearSegmentationValidation(Callback):
                            eval_directory,
                            "embeddings.zarr",
                            ("embedding", ),
-                           input_name='x',
+                           input_name=self.test_input_name,
                            checkpoint=None,
                            normalize_factor='skip',
                            model_output=0,
                            in_shape=(256, 256),
-                           out_shape=(120, 120),
+                           out_shape=self.test_out_shape,
                            spawn_subprocess=False,
                            num_workers=0,
                            z_is_time=True)

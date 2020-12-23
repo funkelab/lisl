@@ -233,16 +233,16 @@ class RandomShiftDataset(Dataset):
                                                           spatial_dims=2)
 
         self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_0,
-                                                                   scale_min=0.7,
-                                                                   scale_max=1.3,
-                                                                   shift_min=-0.5,
-                                                                   shift_max=0.5)
+                                                                   scale_min=0.9,
+                                                                   scale_max=1.1,
+                                                                   shift_min=-0.1,
+                                                                   shift_max=0.1)
 
         self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_1,
-                                                                   scale_min=0.7,
-                                                                   scale_max=1.3,
-                                                                   shift_min=-0.5,
-                                                                   shift_max=0.5)
+                                                                   scale_min=0.9,
+                                                                   scale_max=1.1,
+                                                                   shift_min=-0.1,
+                                                                   shift_max=0.1)
 
         if upsample is not None:
             self.pipeline = self.pipeline + UpSample(self.raw_0, upsample, self.raw_0_us)
@@ -305,6 +305,7 @@ class SSLDataModule(pl.LightningDataModule):
         self.upsample = upsample
 
     def setup(self, stage=None):
+        print(self.filename)
         self.mosaic_train = RandomShiftDataset(self.filename,
                                                self.key,
                                                time_window=(self.time_min, self.time_split),

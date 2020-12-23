@@ -8,6 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def predict_volume(
         model,
         dataset,
@@ -22,7 +23,6 @@ def predict_volume(
         out_shape=None,
         spawn_subprocess=True,
         num_workers=0,
-        z_is_time=True,
         apply_voxel_size=True):
 
     raw = gp.ArrayKey('RAW')
@@ -44,11 +44,8 @@ def predict_volume(
     spatial_dims = in_shape.dims()
     is_2d = spatial_dims == 2
 
-    print(in_shape, out_shape, voxel_size)
-
-    if apply_voxel_size:
-        in_shape = in_shape * voxel_size
-        out_shape = out_shape * voxel_size
+    in_shape = in_shape * voxel_size
+    out_shape = out_shape * voxel_size
 
     logger.info(f"source roi: {source_roi}")
     logger.info(f"in_shape: {in_shape}")
@@ -60,8 +57,6 @@ def predict_volume(
     request.add(prediction, out_shape)
 
     context = (in_shape - out_shape) / 2
-
-    print("context", context, in_shape, out_shape)
 
     source = (
         gp.ZarrSource(
@@ -84,9 +79,7 @@ def predict_volume(
 
     # 2D raw is either (n, y, x) or (c, n, y, x)
     # 3D raw is either (z, y, x) or (c, z, y, x)
-    num_additional_channels = (2 + spatial_dims) - data_dims
-
-    for _ in range(num_additional_channels):
+    for _ in range((2 + spatial_dims) - data_dims):
         source += AddChannelDim(raw)
 
     # 2D raw: (c, n, y, x)
@@ -101,6 +94,8 @@ def predict_volume(
     with gp.build(source):
         raw_roi = source.spec[raw].roi
         logger.info(f"raw_roi: {raw_roi}")
+
+
 
     pipeline = source
         

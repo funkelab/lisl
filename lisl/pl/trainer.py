@@ -24,6 +24,7 @@ from skimage.io import imsave
 
 import functools
 import inspect
+from tiktorch.models.dunet import DUNet
 
 # from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
@@ -32,9 +33,20 @@ from lisl.pl.utils import vis, offset_slice, label2color
 
 # from segmentation_models_pytorch.deeplabv3.model import DeepLabV3Plus
 
+class Deeplabv3(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.unet = torch.hub.load('pytorch/vision:v0.6.0', 'deeplabv3_resnet101', pretrained=True)
+        self.unet.classifier[4] = nn.Conv2d(256, out_channels, kernel_size=1, stride=1)
+        self.unet.backbone.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, padding=3, bias=False)
+        self.unet.aux_classifier[4] = nn.Conv2d(256, out_channels, kernel_size=1, stride=1)
+
+    def forward(self, x):
+        return self.unet(x)['out']
 
 class SSLTrainer(pl.LightningModule):
     def __init__(self, loss_name="CPC",
+                       unet_type="gp",
                        distance=8,
                        head_layers=4,
                        encoder_layers=2,
@@ -56,12 +68,12 @@ class SSLTrainer(pl.LightningModule):
         self.head_layers = head_layers
         self.encoder_layers = encoder_layers
         self.loss_name = loss_name
+        self.unet_type = unet_type
         self.initial_lr = initial_lr
 
         self.distance = distance
         self.stride = stride
         self.embed_scale = 0.1
-
         self.build_models()
 
     @staticmethod
@@ -76,6 +88,7 @@ class SSLTrainer(pl.LightningModule):
         parser.add_argument('--out_channels', type=int, default=3)
         parser.add_argument('--initial_lr', type=float, default=1e-4)
         parser.add_argument('--loss_name', type=str, default="CPC")
+        parser.add_argument('--unet_type', type=str, default="gp")
 
         return parser
 
@@ -102,18 +115,25 @@ class SSLTrainer(pl.LightningModule):
 
         dsf, ks = get_unet_kernels(self.ndim)
 
-        self.unet = UNet(
-            in_channels=self.in_channels,
-            num_fmaps_out=self.hidden_channels,
-            num_fmaps=32,
-            fmap_inc_factor=2,
-            downsample_factors=dsf,
-            kernel_size_down=ks,
-            kernel_size_up=ks,
-            activation="GELU",
-            num_heads=1,
-            constant_upsample=True,
-        )
+        if self.unet_type == "gp":
+            self.unet = UNet(
+                in_channels=self.in_channels,
+                num_fmaps_out=self.hidden_channels,
+                num_fmaps=32,
+                fmap_inc_factor=2,
+                downsample_factors=dsf,
+                kernel_size_down=ks,
+                kernel_size_up=ks,
+                activation="GELU",
+                num_heads=1,
+                constant_upsample=True,
+            )
+        elif self.unet_type == "dunet":
+            self.unet = DUNet(self.in_channels, 4, N=32, return_hypercolumns=True)
+        elif self.unet_type == "deeplab":
+            self.unet = Deeplabv3(self.in_channels, self.hidden_channels)
+        else:
+            raise NotImplementedError(f"model type {self.unet_type} not found")
 
         self.head = MLP(self.hidden_channels, self.out_channels, n_hidden_layers=self.head_layers,
                         n_hidden=self.hidden_channels, ndim=self.ndim)
@@ -521,8 +541,12 @@ class ContextPredictionTrainer(SSLTrainer):
             #     e_0.shape[0])), dim=1) for e_0 in embedding_shift.detach().cpu()), dim=-1)
             # embedding_batch = torch.cat((embedding_batch, embedding_batch_shift), dim=-1)
 
-            vis_labels = tuple(label2color(_) for _ in context_pred.detach().argmax(dim=1).cpu().numpy())
+            vis_labels = tuple(_ for _ in context_pred.detach().argmax(dim=1).cpu().numpy())
             vis_labels = np.concatenate(vis_labels, axis=-1)
+            vis_gtlabels = tuple(_ for _ in expand_y.detach().cpu().numpy())
+            vis_gtlabels = np.concatenate(vis_gtlabels, axis=-1)
+            vis_labels = label2color(np.concatenate((vis_labels, vis_gtlabels), axis=-2))
+
             self.logger.experiment.add_image(f'argmax_prediction', vis_labels, self.global_step)
 
             vis_probs = tuple(context_pred[b].detach().cpu().softmax(dim=0)[y[b]].numpy() for b in range(context_pred.shape[0]))
