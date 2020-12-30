@@ -13,6 +13,7 @@ import argparse
 import time
 import logging
 import os
+from tifffile import imread as tiffread
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -232,17 +233,17 @@ class RandomShiftDataset(Dataset):
                                                           prob_slip=-1,
                                                           spatial_dims=2)
 
-        self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_0,
-                                                                   scale_min=0.9,
-                                                                   scale_max=1.1,
-                                                                   shift_min=-0.1,
-                                                                   shift_max=0.1)
+        # self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_0,
+        #                                                            scale_min=0.9,
+        #                                                            scale_max=1.1,
+        #                                                            shift_min=-0.1,
+        #                                                            shift_max=0.1)
 
-        self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_1,
-                                                                   scale_min=0.9,
-                                                                   scale_max=1.1,
-                                                                   shift_min=-0.1,
-                                                                   shift_max=0.1)
+        # self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_1,
+        #                                                            scale_min=0.9,
+        #                                                            scale_max=1.1,
+        #                                                            shift_min=-0.1,
+        #                                                            shift_max=0.1)
 
         if upsample is not None:
             self.pipeline = self.pipeline + UpSample(self.raw_0, upsample, self.raw_0_us)
@@ -283,142 +284,159 @@ class RandomShiftDataset(Dataset):
         # https://xkcd.com/221/
         return 8192
 
+class RandomShiftDataset(Dataset):
 
-class SSLDataModule(pl.LightningDataModule):
+    def __init__(self,
+                 filename,
+                 key,
+                 shape=(256, 256),
+                 time_window=None,
+                 max_direction=8,
+                 distance=16,
+                 upsample=None):
 
-    def __init__(self, batch_size, filename, key,
-                 shape=(16, 256, 256), time_min=0,
-                 time_split=90, time_max=100, loader_workers=10,
-                 max_direction=8, context_distance=32, upsample=(1, 4, 4)):
-
-        super().__init__()
-        self.batch_size = batch_size
         self.filename = filename
         self.key = key
         self.shape = shape
-        self.time_min = time_min
-        self.time_split = time_split
-        self.time_max = time_max
-        self.loader_workers = loader_workers
         self.max_direction = max_direction
-        self.context_distance = context_distance
+        self.distance = distance
+        self.raw_0 = gp.ArrayKey('RAW_0')
+        self.raw_1 = gp.ArrayKey('RAW_1')
+        self.raw_0_us = gp.ArrayKey('RAW_0_US')
+        self.raw_1_us = gp.ArrayKey('RAW_1_US')
         self.upsample = upsample
+        self.time_window = time_window
 
-    def setup(self, stage=None):
-        print(self.filename)
-        self.mosaic_train = RandomShiftDataset(self.filename,
-                                               self.key,
-                                               time_window=(self.time_min, self.time_split),
-                                               shape=self.shape,
-                                               max_direction=self.max_direction,
-                                               distance=self.context_distance,
-                                               upsample=self.upsample)
+        self.pipeline = self.build_source()
 
-        self.mosaic_val = RandomShiftDataset(self.filename,
-                                             self.key,
-                                             time_window=(self.time_split + 1, self.time_max),
-                                             shape=self.shape,
-                                             max_direction=self.max_direction,
-                                             distance=self.context_distance,
-                                             upsample=self.upsample)
+        self.pipeline = self.pipeline + gp.RandomLocation() + IntensityDiffFilter(self.raw_0, min_distance=0.1, channel=0)
 
-    def train_dataloader(self):
-        return DataLoader(self.mosaic_train, batch_size=self.batch_size, num_workers=self.loader_workers)
+        # add  augmentations
+        self.pipeline = self.pipeline + gp.ElasticAugment([40, 40],
+                                                          [2, 2],
+                                                          [0, math.pi / 2.0],
+                                                          prob_slip=-1,
+                                                          spatial_dims=2)
 
-    def val_dataloader(self):
-        return DataLoader(self.mosaic_val, batch_size=self.batch_size, num_workers=self.loader_workers)
+        self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_0,
+                                                                   scale_min=0.9,
+                                                                   scale_max=1.1,
+                                                                   shift_min=-0.1,
+                                                                   shift_max=0.1)
 
-    def test_dataloader(self):
-        return None
+        self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_1,
+                                                                   scale_min=0.9,
+                                                                   scale_max=1.1,
+                                                                   shift_min=-0.1,
+                                                                   shift_max=0.1)
 
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = argparse.ArgumentParser(
-            parents=[parent_parser], add_help=False)
-        try:
-            parser.add_argument('--batch_size', type=int, default=8)
-        except argparse.ArgumentError:
-            pass
-        parser.add_argument('--loader_workers', type=int, default=8)
-        parser.add_argument('--filename', type=str)
-        parser.add_argument('--key', type=str)
-        parser.add_argument('--shape', nargs='*', default=(16, 256, 256))
-        parser.add_argument('--time_min', type=int, default=0)
-        parser.add_argument('--time_split', type=int, default=90)
-        parser.add_argument('--time_max', type=int, default=100)
-        parser.add_argument('--max_direction', type=int, default=8)
-        parser.add_argument('--add_sparse_mosaic_channel', action='store_true', )
-        parser.add_argument('--context_distance', type=int, default=128)
+        if upsample is not None:
+            self.pipeline = self.pipeline + UpSample(self.raw_0, upsample, self.raw_0_us)
+            self.pipeline = self.pipeline + UpSample(self.raw_1, upsample, self.raw_1_us)
+        
 
-        return parser
+        self.pipeline.setup()
+        np.random.seed(os.getpid() + int(time.time()))
 
+    def build_source(self):
+        data = daisy.open_ds(filename, key)
 
-class MosaicDataModule(pl.LightningDataModule):
+        if self.time_window is None:
+            source_roi = gp.Roi(data.roi.get_offset(), data.roi.get_shape())
+        else:
+            offs = list(data.roi.get_offset())
+            offs[1] += self.time_window[0]
+            sh = list(data.roi.get_shape())
+            offs[1] = self.time_window[1] - self.time_window[0]
+            source_roi = gp.Roi(tuple(offs), tuple(sh))
 
-    def __init__(self, batch_size, filename, key, density=None,
-                 shape=(16, 256, 256), time_min=0,
-                 time_split=90, time_max=100, loader_workers=10,
-                 add_sparse_mosaic_channel=True, random_rot=False):
-        super().__init__()
-        self.batch_size = batch_size
-        self.filename = filename
-        self.key = key
-        self.shape = shape
-        self.density = density
-        self.time_min = time_min
-        self.time_split = time_split
-        self.time_max = time_max
-        self.loader_workers = loader_workers
-        self.add_sparse_mosaic_channel = add_sparse_mosaic_channel
-        self.random_rot = random_rot
+        voxel_size = gp.Coordinate(data.voxel_size)
 
-    def setup(self, stage=None):
-        self.mosaic_train = SparseChannelDataset(self.filename,
-                                                 self.key,
-                                                 density=self.density,
-                                                 time_window=(self.time_min, self.time_split),
-                                                 shape=self.shape,
-                                                 add_sparse_mosaic_channel=self.add_sparse_mosaic_channel,
-                                                 random_rot=self.random_rot)
-        self.mosaic_val = SparseChannelDataset(self.filename,
-                                               self.key,
-                                               density=self.density,
-                                               time_window=(self.time_split + 1, self.time_max),
-                                               shape=self.shape,
-                                               add_sparse_mosaic_channel=self.add_sparse_mosaic_channel,
-                                               random_rot=self.random_rot)
-
-    def train_dataloader(self):
-        return DataLoader(self.mosaic_train, batch_size=self.batch_size, num_workers=self.loader_workers)
-
-    def val_dataloader(self):
-        return DataLoader(self.mosaic_val, batch_size=self.batch_size, num_workers=self.loader_workers)
-
-    def test_dataloader(self):
-        return None
-
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = argparse.ArgumentParser(
-            parents=[parent_parser], add_help=False)
-        try:
-            parser.add_argument('--batch_size', type=int, default=8)
-        except argparse.ArgumentError:
-            pass
-        parser.add_argument('--loader_workers', type=int, default=8)
-        parser.add_argument('--filename', type=str)
-        parser.add_argument('--key', type=str)
-        parser.add_argument('--shape', nargs='*', default=(16, 256, 256))
-        parser.add_argument('--time_min', type=int, default=0)
-        parser.add_argument('--time_split', type=int, default=90)
-        parser.add_argument('--time_max', type=int, default=100)
-        parser.add_argument('--density', type=float, default=0.5)
-        parser.add_argument('--add_sparse_mosaic_channel', action='store_true', )
-        parser.add_argument('--random_rot', action='store_true')
-
-        return parser
+        return gp.ZarrSource(filename,
+                             {
+                                 self.raw_0: key,
+                                 self.raw_1: key
+                             },
+                             array_specs={
+                                 self.raw_0: gp.ArraySpec(
+                                     roi=source_roi,
+                                     voxel_size=voxel_size,
+                                     interpolatable=True),
+                                 self.raw_1: gp.ArraySpec(
+                                     roi=source_roi,
+                                     voxel_size=voxel_size,
+                                     interpolatable=True)
+                             })
 
 
+    def __getitem__(self, index):
+
+        request = gp.BatchRequest()
+
+        # request.add(self.raw_0, (1, ) + tuple(self.shape))
+        # request.add(self.raw_0, (1, ) + tuple(self.shape))
+        direction = random.randrange(0, self.max_direction)
+
+        offset = offset_from_direction(direction,
+                                       max_direction=self.max_direction,
+                                       distance=self.distance)
+        if self.upsample is not None:
+            ref0, ref1 = self.raw_0_us, self.raw_1_us
+        else:
+            ref0, ref1 = self.raw_0, self.raw_1
+
+        request[ref0] = gp.Roi((0, 0, 0), (1, 256, 256))
+        request[ref1] = gp.Roi((0, ) + offset, (1, 256, 256))
+            
+        batch = self.pipeline.request_batch(request)
+
+        out0 = batch[ref0].data
+        out1 = batch[ref1].data
+
+        raw_stack = np.concatenate((out0, out1), axis=0)
+        shift_direction = np.array(direction, dtype=np.int64)
+
+        return raw_stack, shift_direction
+
+    def __len__(self):
+        # return a random length
+        # determined by fair dice roll ;)
+        # https://xkcd.com/221/
+        return 8192
+
+from csbdeep.utils import download_and_extract_zip_file
+from pathlib import Path
+
+class DSBDataset(Dataset):
+
+    def __init__(self,
+                 pathname,
+                 **kwargs):
+
+        path = Path(pathname)
+
+        # download DSB datasetffrom stardist repo
+        download_and_extract_zip_file(
+            url       = 'https://github.com/mpicbg-csbd/stardist/releases/download/0.1.0/dsb2018.zip',
+            targetdir = str(path/'data'),
+            verbose   = 1,
+        )
+
+        # read dataset to memory
+        self.X = sorted(path.glob('data/dsb2018/train/images/*.tif'))
+        self.Y = sorted(path.glob('data/dsb2018/train/masks/*.tif'))
+        assert all(Path(x).name==Path(y).name for x,y in zip(self.X,self.Y))
+        self.X = [tiffread(str(e)) for e in self.X]
+        self.Y = [tiffread(str(e)) for e in self.Y]
+        print(self.X[0].shape)
+        print(self.Y[0].shape)
+
+    def __getitem__(self, index):
+        return self.X[index], self.Y[index]
+
+    def __len__(self):
+        return len(self.X)
+    
 
 if __name__ == '__main__':
     # GunpowderDataset("/home/swolf/local/data/17-04-14/preprocessing/array.n5")
@@ -429,15 +447,21 @@ if __name__ == '__main__':
     filename = "/home/swolf/local/data/tmp/raw.n5"
     key = "raw"
 
-    gs = RandomShiftDataset(filename, key, shape=(128, 128), time_window=(0, 10), channels=0)
+    # filename = "~/mnt/cephfs/swolf/data/dsb2018/train"
+    filename = Path.home()/"tmp"
+
+    gs = DSBDataset(filename, shape=(128, 128))
 
     for i in range(100):
 
         inp, target = gs[i]
 
-        imsave(f"img_{i}_00.png", inp)
-        imsave(f"img_{i}_01.png", target)
+        print("inp", inp.shape)
+        print("target", target.shape)
 
+        # for c in range(inp.shape[0]):
+        imsave(f"img_{i}_s.png", inp)
+        imsave(f"img_{i}_t.png", target)
 
         # for z in range(inp.shape[1]):
         #     vecs = target[0]**2 + target[1]**2
