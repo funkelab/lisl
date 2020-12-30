@@ -180,8 +180,8 @@ def offset_from_direction(direction, max_direction=8., distance=10):
     angle = (direction / max_direction)
     angle = 2 * np.pi * angle
 
-    x_offset = int(distance * np.sin(angle))
-    y_offset = int(distance * np.cos(angle))
+    x_offset = int(0.75 * distance * np.sin(angle))
+    y_offset = int(0.75 * distance * np.cos(angle))
 
     x_offset += random.randint(-int(0.15 * distance),
                                +int(0.15 * distance))

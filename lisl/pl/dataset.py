@@ -14,6 +14,8 @@ import time
 import logging
 import os
 from tifffile import imread as tiffread
+from skimage.transform import rescale
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -436,7 +438,77 @@ class DSBDataset(Dataset):
 
     def __len__(self):
         return len(self.X)
-    
+
+def augment(x,
+            min_alpha=0.8,
+            max_alpha=1.2,
+            min_beta=-0.2,
+            max_beta=+0.2,
+            eta_scale=0.05):
+
+    alpha = random.uniform(min_alpha, max_alpha)
+    beta = random.uniform(min_beta, max_beta)
+    noise_level = random.uniform(0, eta_scale)
+    eta = noise_level * np.random.randn(*x.shape)
+
+    return alpha * x + beta + eta
+
+class ShiftDataset(Dataset):
+
+    def __init__(self,
+                 dataset,
+                 shape,
+                 distance,
+                 max_direction):
+
+        self.root_dataset = dataset
+        self.distance = distance
+        self.max_direction = max_direction
+        self.shape = shape
+
+    def __len__():
+        return len(self.root_dataset)
+
+    def __getitem__(self, index):
+
+        x,y = self.root_dataset[index]
+        y = y.astype(np.double)
+
+        # TODO: add general augmentations here
+        factor = 1. + 0.4 * np.random.rand()
+        x = rescale(x, factor, order=1)
+        y = rescale(x, factor, order=0)
+        # ElasticAugment
+        # 
+
+        # reflection padding to make all shifts viable
+        x = np.pad(x, self.distance, mode='reflect')
+        y = np.pad(y, self.distance, mode='constant', constant_values=-1)
+
+        direction = random.randrange(0, self.max_direction)
+        xoff, yoff = offset_from_direction(direction,
+                                           max_direction=self.max_direction,
+                                           distance=self.distance)
+
+        print(xoff, yoff, x.shape)
+
+        x1 = x[self.distance:self.distance+self.shape[0], 
+               self.distance:self.distance+self.shape[1]]
+        x2 = x[self.distance+xoff:self.distance+self.shape[0]+xoff, 
+               self.distance+yoff:self.distance+self.shape[1]+yoff]
+
+        y1 = y[self.distance:self.distance+self.shape[0], 
+               self.distance:self.distance+self.shape[1]]
+        y2 = y[self.distance+xoff:self.distance+self.shape[0]+xoff, 
+               self.distance+yoff:self.distance+self.shape[1]+yoff]
+
+        print(self.distance+xoff, self.distance+yoff)
+        
+        # intensity Augmentation
+        x1 = augment(x1)
+        x2 = augment(x2)
+
+        return np.stack((x1, x2), axis=0), direction, np.stack((y1, y2), axis=0)
 
 if __name__ == '__main__':
     # GunpowderDataset("/home/swolf/local/data/17-04-14/preprocessing/array.n5")
@@ -449,19 +521,23 @@ if __name__ == '__main__':
 
     # filename = "~/mnt/cephfs/swolf/data/dsb2018/train"
     filename = Path.home()/"tmp"
+    distance = 10
 
-    gs = DSBDataset(filename, shape=(128, 128))
+    gs = ShiftDataset(DSBDataset(filename),
+                      (256, 256),
+                      distance,
+                      8)
 
-    for i in range(100):
+    for i in range(10):
 
-        inp, target = gs[i]
+        inp, direction, target = gs[i]
 
         print("inp", inp.shape)
-        print("target", target.shape)
+        # print("target", target.shape)
 
-        # for c in range(inp.shape[0]):
-        imsave(f"img_{i}_s.png", inp)
-        imsave(f"img_{i}_t.png", target)
+        for c in range(inp.shape[0]):
+            imsave(f"img_{i}_{c}_s.png", inp[c])
+        # imsave(f"img_{i}_0_t.png", target[0])
 
         # for z in range(inp.shape[1]):
         #     vecs = target[0]**2 + target[1]**2
