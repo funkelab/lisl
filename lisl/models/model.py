@@ -49,7 +49,6 @@ class MLP(nn.Module):
         if isinstance(n_hidden_layers, dict):
             n_hidden_layers = 4
             n_classes = 1
-        print(n_hidden_layers)
 
         self.block_forward = nn.Sequential()
         for i in range(n_hidden_layers):

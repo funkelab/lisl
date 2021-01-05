@@ -6,7 +6,123 @@ import torch
 import numpy as np
 from partialconv.models.partialconv2d import PartialConv2d
 from partialconv.models.partialconv3d import PartialConv3d
+import torch
+import torch.nn as nn
+from torchvision import datasets, transforms, models
 
+import numpy as np
+import scipy.sparse as sparse
+from pl_bolts.transforms.self_supervised.ssl_transforms import Patchify
+import math
+
+class UnPatchify(object):
+    """
+    Rearranges patchified tensor into a tiled image with spatial dimenstions.
+    """
+
+    def __init__(self, patch_size, overlap_size):
+        self.patch_size = patch_size
+        self.patch_stride = self.patch_size - overlap_size
+        assert(self.patch_stride >= 0)
+
+    def __call__(self, x):
+        x = x.unsqueeze(0)
+        b, c, h, w = x.size()
+
+        # patch up the images
+        # (b, c, h, w) -> (b, c*patch_size, L)
+        x = F.unfold(x, kernel_size=self.patch_size, stride=self.patch_stride)
+
+        # (b, c*patch_size, L) -> (b, nb_patches, width, height)
+        x = x.transpose(2, 1).contiguous().view(
+            b, -1, self.patch_size, self.patch_size)
+
+        # reshape to have (b x patches, c, h, w)
+        x = x.view(-1, c, self.patch_size, self.patch_size)
+        x = x.squeeze(0)
+        x = x.unsqueeze(0)
+        print(x.size())
+        b, c, h, w = x.size()
+        x = x.squeeze(0)
+        return x
+
+class PatchedResnet50(nn.Module):
+
+    def __init__(
+            self,
+            in_channels,
+            out_channels,
+            patchsize=16,
+            overlap=11):
+
+        super().__init__()
+
+        model = models.resnet18(pretrained=True)
+        ptweights = model.conv1.weight.mean(dim=1, keepdim=True).data
+        model.conv1 = nn.Conv2d(1, 64, kernel_size=7, padding=3, bias=False)
+        model.conv1.weight.data = ptweights
+
+        if out_channels > 1000:
+            raise NotImplementedError("pretrained resnet can not output embeddings with more channels than 1000")
+
+        # turn last layer into a 2d convolution
+        fc_conv = nn.Conv2d(2048, out_channels, kernel_size=1, padding=0, bias=True)
+        fc_conv.weight.data = model.fc.weight.data[:out_channels, :, None, None]
+        fc_conv.bias.data = model.fc.bias.data[:out_channels]
+
+        layers = list(model.children())[:-1] + [fc_conv]
+        model = torch.nn.Sequential(*layers)
+
+        self.resnet = model
+        self.patchsize = patchsize
+        self.patch = Patchify(patch_size=patchsize, overlap_size=overlap)
+        self.pred_patch = Patchify(patch_size=patchsize, overlap_size=patchsize-1)
+
+    def forward(self, x):
+        patches = torch.stack(list(self.patch(x0) for x0 in x))
+        assert patches.shape[-2] == patches.shape[-1]
+
+        b, p, c, pw, ph = patches.shape
+        w = h = int(math.sqrt(p))
+        out = self.resnet(patches.view((b*p, c, pw, ph)))
+
+        assert out.shape[-2:] == (1, 1)
+        assert p == h*w
+        
+        out = out.view((b, p, -1))
+        cout = out.shape[-1]
+        out = out.permute(0, 2, 1).view(b, cout, w, h)
+        print(out.shape)
+        return out
+
+    def predict(self, x, device=None):
+        """ Densly predict the embedding for every pixel in x
+        To save memory, Each scanline is predicted individually and stacked together"""
+
+        lp = self.patchsize // 2
+        rp = (self.patchsize - 1) // 2
+
+        # padd the image to get one patch corresponding to each pixel 
+        padded = F.pad(x, (lp, rp, lp, rp), mode='reflect')
+
+        with torch.no_grad():
+
+            out = []
+            for i in range(x.shape[-2]):
+                patches = torch.stack(list(self.pred_patch(x0) for x0 in padded[:, :, i:i+self.patchsize]))
+                b, p, c, pw, ph = patches.shape
+                patches = patches.view(b*p, c, pw, ph)
+                pred_i = self.resnet(patches)
+                pred_i = pred_i.view((b, p, -1))
+                pred_i = pred_i.permute(0, 2, 1).view(b, pred_i.shape[-1], 1, x.shape[-1])
+
+                if device is not None:
+                    pred_i = pred_i.to(device)
+
+                out.append(pred_i)
+            out = torch.cat(out, dim=2)
+
+        return out
 
 def get_unet_kernels(ndim):
     if ndim == 3:

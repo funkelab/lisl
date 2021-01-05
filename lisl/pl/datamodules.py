@@ -1,4 +1,7 @@
-
+import argparse
+import pytorch_lightning as pl
+from torch.utils.data import DataLoader
+from lisl.pl.dataset import ShiftDataset, SparseChannelDataset, RandomShiftDataset, DSBDataset
 
 class SSLDataModule(pl.LightningDataModule):
 
@@ -131,5 +134,74 @@ class MosaicDataModule(pl.LightningDataModule):
         parser.add_argument('--density', type=float, default=0.5)
         parser.add_argument('--add_sparse_mosaic_channel', action='store_true', )
         parser.add_argument('--random_rot', action='store_true')
+
+        return parser
+
+
+class DSBDataModule(pl.LightningDataModule):
+
+    def __init__(self, batch_size, dspath,
+                 shape=(256, 256), loader_workers=10,
+                 max_direction=8, context_distance=32, upsample=2.):
+
+        super().__init__()
+        self.batch_size = batch_size
+        self.dspath = dspath
+        self.shape = shape
+        self.loader_workers = loader_workers
+        self.max_direction = max_direction
+        self.context_distance = context_distance
+        self.upsample = upsample
+
+    def setup(self, stage=None):
+
+        self.ds_train = ShiftDataset(
+                                DSBDataset(self.dspath),
+                                self.shape,
+                                self.context_distance,
+                                self.max_direction,
+                                self.upsample,
+                                train=True,
+                                return_segmentation=False)
+
+        self.ds_val = ShiftDataset(
+                                DSBDataset(self.dspath),
+                                self.shape,
+                                self.context_distance,
+                                self.max_direction,
+                                self.upsample,
+                                train=False,
+                                return_segmentation=True)
+
+    def train_dataloader(self):
+        return DataLoader(self.ds_train,
+                          shuffle=True,
+                          batch_size=self.batch_size,
+                          num_workers=self.loader_workers,
+                          drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.ds_val,
+                          batch_size=2,
+                          num_workers=self.loader_workers,
+                          drop_last=True)
+
+    def test_dataloader(self):
+        return None
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = argparse.ArgumentParser(
+            parents=[parent_parser], add_help=False)
+        try:
+            parser.add_argument('--batch_size', type=int, default=8)
+        except argparse.ArgumentError:
+            pass
+        parser.add_argument('--loader_workers', type=int, default=8)
+        parser.add_argument('--dspath', type=str)
+        parser.add_argument('--shape', nargs='*', default=(256, 256))
+        parser.add_argument('--max_direction', type=int, default=8)
+        # parser.add_argument('--add_sparse_mosaic_channel', action='store_true', )
+        parser.add_argument('--context_distance', type=int, default=128)
 
         return parser

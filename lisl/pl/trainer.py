@@ -13,11 +13,10 @@ from torch.utils.data.distributed import DistributedSampler
 import random
 
 import pytorch_lightning as pl
-from lisl.pl.model import MLP, get_unet_kernels
+from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet50
 from funlib.learn.torch.models import UNet
 
 from radam import RAdam
-from lisl.pl.dataset import MosaicDataModule
 import time
 import numpy as np
 from skimage.io import imsave
@@ -26,6 +25,23 @@ import functools
 import inspect
 from tiktorch.models.dunet import DUNet
 
+import itertools
+import os
+import copy
+from lisl.datasets import Dataset
+import zarr
+import numpy as np
+from sklearn.neighbors import KNeighborsClassifier
+import stardist
+from skimage import measure
+from scipy import ndimage
+from skimage.morphology import watershed
+from skimage.io import imsave
+from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
+from ctcmetrics.seg import seg_metric
+from sklearn.decomposition import PCA
+from lisl.pl.evaluation import compute_3class_segmentation
+from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
 # from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
 from torch.optim.lr_scheduler import MultiStepLR
@@ -129,9 +145,11 @@ class SSLTrainer(pl.LightningModule):
                 constant_upsample=True,
             )
         elif self.unet_type == "dunet":
-            self.unet = DUNet(self.in_channels, 4, N=32, return_hypercolumns=True)
+            self.unet = DUNet(self.in_channels, 16, N=8, return_hypercolumns=True)
         elif self.unet_type == "deeplab":
             self.unet = Deeplabv3(self.in_channels, self.hidden_channels)
+        elif self.unet_type == "resnet":
+            self.unet = PatchedResnet50(self.in_channels, self.hidden_channels)
         else:
             raise NotImplementedError(f"model type {self.unet_type} not found")
 
@@ -192,7 +210,7 @@ class SSLTrainer(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.initial_lr)
-        scheduler = MultiStepLR(optimizer, milestones=[4, 16, 64], gamma=0.5)
+        scheduler = MultiStepLR(optimizer, milestones=[500], gamma=0.1)
         return [optimizer], [scheduler]
 
     def squeeze(self, inp):
@@ -521,13 +539,17 @@ class ContextPredictionTrainer(SSLTrainer):
         tensorboard_logs['iteration'] = self.global_step
 
         if self.log_now():
+
+            embedding_shift = embedding_shift.detach().cpu()
+            embedding = embedding.detach().cpu()
+            
             self.logger.experiment.add_histogram(
                 "target_hist", y.detach().cpu(), self.global_step)
             self.logger.experiment.add_histogram(
                 "embedding_hist", embedding[..., ::3, ::11, ::11].detach().cpu(), self.global_step)
             
             embedding_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(torch.cat((e_0[c], e_s[c]), dim=-1))) for c in range(
-                e_0.shape[0])), dim=1) for e_0, e_s in zip(embedding.detach().cpu(), embedding_shift.detach().cpu())), dim=-1)
+                e_0.shape[0])), dim=1) for e_0, e_s in zip(embedding, embedding_shift)), dim=-1)
             # embedding_batch_shift = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(e_0[c])) for c in range(
             #     e_0.shape[0])), dim=1) for e_0 in embedding_shift.detach().cpu()), dim=-1)
             # embedding_batch = torch.cat((embedding_batch, embedding_batch_shift), dim=-1)
@@ -541,7 +563,7 @@ class ContextPredictionTrainer(SSLTrainer):
             #     e_0.shape[0])), dim=1) for e_0 in embedding_shift.detach().cpu()), dim=-1)
             # embedding_batch = torch.cat((embedding_batch, embedding_batch_shift), dim=-1)
 
-            vis_labels = tuple(_ for _ in context_pred.detach().argmax(dim=1).cpu().numpy())
+            vis_labels = tuple(_ for _ in context_pred.detach().cpu().argmax(dim=1).numpy())
             vis_labels = np.concatenate(vis_labels, axis=-1)
             vis_gtlabels = tuple(_ for _ in expand_y.detach().cpu().numpy())
             vis_gtlabels = np.concatenate(vis_gtlabels, axis=-1)
@@ -555,25 +577,162 @@ class ContextPredictionTrainer(SSLTrainer):
 
         return {'loss': loss, 'log': tensorboard_logs}
 
+    def log_img(self, name, img, eval_directory=None):
+        self.logger.experiment.add_image(
+            name, img, self.global_step)
+        if eval_directory is not None:
+            try:
+                if img.shape[0] == 1:
+                    img = img[0]
+                if img.shape[0] in [3, 4]:
+                    img = img.transpose(1, 2, 0)
+                print(os.path.join(eval_directory, name+".png"))
+                imsave(os.path.join(eval_directory, name+".png"),
+                       (img*255.).astype(np.uint8),
+                       check_contrast=False)
+            except Exception as e:
+                print(e)
+                print("can not imsave ", img.shape)
+
     def validation_step(self, batch, batch_nb):
-        x, y = batch
+        eval_directory = os.path.abspath(os.path.join(self.logger.log_dir,
+                                                      os.pardir,
+                                                      os.pardir,
+                                                      "evaluation",
+                                                      f"{self.global_step:08d}"))
+        
+        x, y, labels_torch = batch
 
-        c_split = x.shape[1] // 2
-        assert(c_split > 0)
+        labels = labels_torch[:, 0].cpu().numpy()
+        del labels_torch
 
-        embedding = self.forward(x[:, :c_split])
-        embedding_shift = self.forward(x[:, c_split:])
+        # save model with evaluation number
+        model_save_path = os.path.join(eval_directory, "model.torch")
+        score_filename = os.path.join(eval_directory, "score.csv")
 
-        stacked_emb = torch.cat((embedding, embedding_shift), dim=1)
-        context_pred = self.context_mlp(stacked_emb)
+        os.makedirs(eval_directory, exist_ok=True)
+        torch.save(self.unet.state_dict(), model_save_path)
+        self.log_img(f'img_val', vis(x[-1, 0].detach().cpu().numpy()), eval_directory=eval_directory)
 
-        expand_y = y[:, None, None].expand(y.shape[0], context_pred.shape[-2], context_pred.shape[-1])
-        loss = nn.functional.cross_entropy(context_pred, expand_y, ignore_index=-100)
+        with torch.no_grad():
+            with open(score_filename, "w") as scf:
 
-        tensorboard_logs = {'val_loss': loss.detach()}
-        tensorboard_logs['iteration'] = self.global_step
+                c_split = x.shape[1] // 2
+                assert(c_split > 0)
 
-        return {'val_loss': loss}
+                # embedding = self.forward(x[:, :c_split])
+                # TODO: expose padding parameters
+                embedding_torch = self.forward(x[:, :c_split])
+                if self.unet_type == "resnet":
+                    embedding_torch = self.unet.predict(x[:, :c_split], device="cpu")
+                elif embedding_torch.shape[-1] != 256:
+                    embedding_torch = self.forward(F.pad(x[:, :c_split], (72, 72, 72, 72), mode='reflect'))[:, :, 4:-4, 4:-4]
+
+                embedding = embedding_torch.detach().cpu().numpy()                
+                del embedding_torch
+                del x
+                del y
+
+                embedding = np.transpose(embedding, (1,0,2,3))
+                self.log_img(f'embedding_0_2', embedding[:3, -1], eval_directory=eval_directory)
+                C, _, W, H = embedding.shape
+
+                pca_in = embedding[:, -1].reshape(C, -1).T
+                pca = PCA(n_components=3, whiten=True)
+                pca_out = pca.fit_transform(pca_in).T
+                pca_image = pca_out.reshape(3, W, H)
+                
+                self.log_img(f'PCA', pca_image, eval_directory=eval_directory)
+                self.log_img(f'gt_val', label2color(labels[-1].astype(np.int32)), eval_directory=eval_directory)
+
+                # embedding_shift = self.forward(x[:, c_split:])
+
+                # stacked_emb = torch.cat((embedding, embedding_shift), dim=1)
+                # context_pred = self.context_mlp(stacked_emb)
+
+                # expand_y = y[:, None, None].expand(y.shape[0], context_pred.shape[-2], context_pred.shape[-1])
+                # loss = nn.functional.cross_entropy(context_pred, expand_y, ignore_index=-100)
+
+                tensorboard_logs = {'val_loss': 0}#loss.detach()}
+                tensorboard_logs['iteration'] = self.global_step
+
+                train_stardist = np.stack(
+                    [stardist.geometry.star_dist(l, n_rays=32) for l in labels])
+                background = labels == 0
+                inner = train_stardist.min(axis=-1) > 3
+                # classes 0: boundaries, 1: inner_cell, 2: background
+                threeclass = (2 * background) + inner
+
+                for n_samples in [5, 10, 20, 50, 100, 200, 500, 1000]:
+
+                    ##########TODO###########
+                    # Find a more efficient way to sample random fg and bg points
+
+                    fg_mask = labels > 0
+                    bg_mask = labels == 0
+
+                    train_mask = np.zeros(fg_mask.shape, dtype=np.bool)
+
+                    fg_indices = list(zip(*np.where(fg_mask)))
+                    random.Random(4).shuffle(fg_indices)
+                    # shuffle is identical in every run
+                    for b0, x0, y0 in itertools.islice(fg_indices, 0, n_samples):
+                        train_mask[b0, x0, y0] = 1
+
+                    bg_indices = list(zip(*np.where(bg_mask)))
+                    random.Random(5).shuffle(bg_indices)
+                    # shuffle is identical in every run
+                    for b0, x0, y0 in itertools.islice(bg_indices, 0, n_samples):
+                        train_mask[b0, x0, y0] = 1
+
+                    ##########TODO###########
+
+                    training_data = embedding[:, train_mask].T
+                    train_labels = threeclass[train_mask]
+
+                    # foreground background
+                    knn = KNeighborsClassifier(n_neighbors=3,
+                                               weights='distance',
+                                               n_jobs=-1)
+
+                    knn.fit(training_data, train_labels)
+
+                    spatial_dims = embedding.shape[1:]
+
+                    flatt_embedding = np.transpose(
+                        embedding.reshape((embedding.shape[0], -1)), (1, 0))
+                    prediction = knn.predict(flatt_embedding)
+                    prediction = prediction.reshape(spatial_dims)
+
+                    inner = prediction == 1
+                    background = prediction == 2
+
+                    predicted_seg = np.stack([compute_3class_segmentation(
+                        i, b) for i, b in zip(inner, background)])
+
+                    arand_score = np.mean([adapted_rand(p, g)
+                                         for p, g in zip(predicted_seg, labels)])
+                    seg_score = np.mean([seg_metric(p, g)
+                                         for p, g in zip(predicted_seg, labels)])
+
+                    scf.write(f"{n_samples},{seg_score},{arand_score}\n")
+
+                    self.log_img(f'3class_val_{n_samples}',
+                            np.stack((prediction[-1] == 0, prediction[-1] == 1, prediction[-1] == 2),
+                                     axis=0).astype(np.float32),
+                            eval_directory=eval_directory)
+
+                    self.log_img(f'instances_val_{n_samples}', label2color(predicted_seg[-1]), eval_directory=eval_directory)
+
+                    self.logger.log_metrics({f"arand_n={n_samples}": arand_score,
+                                             f"seg_n={n_samples}": seg_score}, step=self.global_step)
+
+                    tensorboard_logs[f"arand_n={n_samples}"] = arand_score
+                    tensorboard_logs[f"seg_n={n_samples}"] = seg_score
+
+
+
+        return tensorboard_logs
 
 
     def loss_context_prediction(self, y, embedding):

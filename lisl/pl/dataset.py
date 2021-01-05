@@ -178,113 +178,6 @@ class SparseChannelDataset(Dataset):
         # https://xkcd.com/221/
         return 8192
 
-class RandomShiftDataset(Dataset):
-
-    def __init__(self, filename,
-                 key,
-                 shape=(256, 256),
-                 time_window=None,
-                 max_direction=8,
-                 distance=16,
-                 upsample=None):
-
-        self.filename = filename
-        self.key = key
-        self.shape = shape
-        self.max_direction = max_direction
-        self.distance = distance
-        self.raw_0 = gp.ArrayKey('RAW_0')
-        self.raw_1 = gp.ArrayKey('RAW_1')
-        self.raw_0_us = gp.ArrayKey('RAW_0_US')
-        self.raw_1_us = gp.ArrayKey('RAW_1_US')
-
-        data = daisy.open_ds(filename, key)
-
-        if time_window is None:
-            source_roi = gp.Roi(data.roi.get_offset(), data.roi.get_shape())
-        else:
-            offs = list(data.roi.get_offset())
-            offs[1] += time_window[0]
-            sh = list(data.roi.get_shape())
-            offs[1] = time_window[1] - time_window[0]
-            source_roi = gp.Roi(tuple(offs), tuple(sh))
-
-        voxel_size = gp.Coordinate(data.voxel_size)
-
-        self.pipeline = gp.ZarrSource(
-            filename,
-            {
-                self.raw_0: key,
-                self.raw_1: key
-            },
-            array_specs={
-                self.raw_0: gp.ArraySpec(
-                    roi=source_roi,
-                    voxel_size=voxel_size,
-                    interpolatable=True),
-                self.raw_1: gp.ArraySpec(
-                    roi=source_roi,
-                    voxel_size=voxel_size,
-                    interpolatable=True)
-            }) + gp.RandomLocation() + IntensityDiffFilter(self.raw_0, min_distance=0.1, channel=0)
-
-        # add  augmentations
-        self.pipeline = self.pipeline + gp.ElasticAugment([40, 40],
-                                                          [2, 2],
-                                                          [0, math.pi / 2.0],
-                                                          prob_slip=-1,
-                                                          spatial_dims=2)
-
-        # self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_0,
-        #                                                            scale_min=0.9,
-        #                                                            scale_max=1.1,
-        #                                                            shift_min=-0.1,
-        #                                                            shift_max=0.1)
-
-        # self.pipeline = self.pipeline + AbsolutIntensityAugment(self.raw_1,
-        #                                                            scale_min=0.9,
-        #                                                            scale_max=1.1,
-        #                                                            shift_min=-0.1,
-        #                                                            shift_max=0.1)
-
-        if upsample is not None:
-            self.pipeline = self.pipeline + UpSample(self.raw_0, upsample, self.raw_0_us)
-            self.pipeline = self.pipeline + UpSample(self.raw_1, upsample, self.raw_1_us)
-        
-
-        self.pipeline.setup()
-        np.random.seed(os.getpid() + int(time.time()))
-
-
-    def __getitem__(self, index):
-
-        request = gp.BatchRequest()
-
-        # request.add(self.raw_0, (1, ) + tuple(self.shape))
-        # request.add(self.raw_0, (1, ) + tuple(self.shape))
-        direction = random.randrange(0, self.max_direction)
-
-        offset = offset_from_direction(direction,
-                                       max_direction=self.max_direction,
-                                       distance=self.distance)
-
-        request[self.raw_0_us] = gp.Roi((0, 0, 0), (1, 256, 256))
-        request[self.raw_1_us] = gp.Roi((0, ) + offset, (1, 256, 256))
-        batch = self.pipeline.request_batch(request)
-
-        out0 = batch[self.raw_0_us].data
-        out1 = batch[self.raw_1_us].data
-
-        raw_stack = np.concatenate((out0, out1), axis=0)
-        shift_direction = np.array(direction, dtype=np.int64)
-
-        return raw_stack, shift_direction
-
-    def __len__(self):
-        # return a random length
-        # determined by fair dice roll ;)
-        # https://xkcd.com/221/
-        return 8192
 
 class RandomShiftDataset(Dataset):
 
@@ -459,14 +352,20 @@ class ShiftDataset(Dataset):
                  dataset,
                  shape,
                  distance,
-                 max_direction):
+                 max_direction,
+                 max_scale=2.,
+                 train=True,
+                 return_segmentation=True):
 
         self.root_dataset = dataset
         self.distance = distance
         self.max_direction = max_direction
-        self.shape = shape
+        self.max_scale = max_scale
+        self.shape = tuple(int(_) for _ in shape)
+        self.train = train
+        self.return_segmentation = return_segmentation
 
-    def __len__():
+    def __len__(self):
         return len(self.root_dataset)
 
     def __getitem__(self, index):
@@ -474,12 +373,12 @@ class ShiftDataset(Dataset):
         x,y = self.root_dataset[index]
         y = y.astype(np.double)
 
-        # TODO: add general augmentations here
-        factor = 1. + 0.4 * np.random.rand()
-        x = rescale(x, factor, order=1)
-        y = rescale(x, factor, order=0)
-        # ElasticAugment
-        # 
+        if self.train:
+            factor = 1. + self.max_scale * np.random.rand()
+            x = rescale(x, factor, order=1)
+            y = rescale(x, factor, order=0)
+            # TODO: add general augmentations here
+            # e.g. ElasticAugment
 
         # reflection padding to make all shifts viable
         x = np.pad(x, self.distance, mode='reflect')
@@ -490,8 +389,6 @@ class ShiftDataset(Dataset):
                                            max_direction=self.max_direction,
                                            distance=self.distance)
 
-        print(xoff, yoff, x.shape)
-
         x1 = x[self.distance:self.distance+self.shape[0], 
                self.distance:self.distance+self.shape[1]]
         x2 = x[self.distance+xoff:self.distance+self.shape[0]+xoff, 
@@ -501,14 +398,18 @@ class ShiftDataset(Dataset):
                self.distance:self.distance+self.shape[1]]
         y2 = y[self.distance+xoff:self.distance+self.shape[0]+xoff, 
                self.distance+yoff:self.distance+self.shape[1]+yoff]
-
-        print(self.distance+xoff, self.distance+yoff)
         
-        # intensity Augmentation
-        x1 = augment(x1)
-        x2 = augment(x2)
+        if self.train:
+            x1 = augment(x1)
+            x2 = augment(x2)
 
-        return np.stack((x1, x2), axis=0), direction, np.stack((y1, y2), axis=0)
+        x = np.stack((x1, x2), axis=0).astype(np.float32)
+        y = np.stack((y1, y2), axis=0).astype(np.float32)
+
+        if self.return_segmentation:
+            return x, direction, y 
+        else:
+            return x, direction
 
 if __name__ == '__main__':
     # GunpowderDataset("/home/swolf/local/data/17-04-14/preprocessing/array.n5")
@@ -526,11 +427,13 @@ if __name__ == '__main__':
     gs = ShiftDataset(DSBDataset(filename),
                       (256, 256),
                       distance,
-                      8)
+                      8,
+                      train=True,
+                      return_segmentation=False)
 
     for i in range(10):
 
-        inp, direction, target = gs[i]
+        inp, direction = gs[i]
 
         print("inp", inp.shape)
         # print("target", target.shape)
