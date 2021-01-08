@@ -17,27 +17,40 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for lr in [1e-3, 1e-4, 1e-5]:
-      for context_distance in [16, 40]:
+    for lr in [1e-5]:
+      for context_distance in [16, 8, 20, 24]:
+        for patchsize in [16, 24, 32]:
+        # for patchdilation in [1, 2, 3, 4]:
 
-        # for unet_type, test_out_shape, test_input_name, hidden_channels, bs in zip(["gp", "dunet", "deeplab"], ["120 120", "256 256", "256 256"], ["x", "input_", "x"], [137, 137, 137], [16, 16, 2]):
+          # for unet_type, test_out_shape, test_input_name, hidden_channels, bs in zip(["gp", "dunet", "deeplab"], ["120 120", "256 256", "256 256"], ["x", "input_", "x"], [137, 137, 137], [16, 16, 2]):
 
-        unet_type = "resnet"
-        test_out_shape = "49, 49"
-        test_input_name = "x"
-        hidden_channels = 137
-        bs = 4
-        
-        args =  options.args + f" --initial_lr {lr} --unet_type {unet_type} --hidden_channels {hidden_channels} --context_distance {context_distance} --batch_size {bs}"
+          unet_type = "resnet"
+          test_out_shape = "49, 49"
+          test_input_name = "x"
+          hidden_channels = 137
+          patchoverlap = 5
+          patchdilation = 1
+          hidden_channels = 3
 
-        set_up_experiment(options.base_dir,
-                          options.pybin,
-                          options.experiment_library,
-                          options.script,
-                          options.experiment,
-                          experiment_number,
-                          options.cleanup,
-                          args)
 
-        experiment_number += 1
+          args = options.args + f" --initial_lr {lr}"
+          args += f" --unet_type {unet_type}"
+          args += f" --hidden_channels {hidden_channels}"
+          args += f" --context_distance {context_distance}"
+          args += f" --patch_size_overlap_dilation {patchsize} {patchoverlap} {patchdilation}"
+          args += f" --patchsize {patchsize}"
+          args += f" --patchoverlap {patchoverlap}"
+          args += f" --patchdilation {patchdilation}"
+          args += f" --loss_name anchor"
+
+          set_up_experiment(options.base_dir,
+                            options.pybin,
+                            options.experiment_library,
+                            options.script,
+                            options.experiment,
+                            experiment_number,
+                            options.cleanup,
+                            args)
+
+          experiment_number += 1
 

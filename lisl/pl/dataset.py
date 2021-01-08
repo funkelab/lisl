@@ -15,7 +15,8 @@ import logging
 import os
 from tifffile import imread as tiffread
 from skimage.transform import rescale
-
+from lisl.pl.utils import Patchify
+import torch
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -355,6 +356,7 @@ class ShiftDataset(Dataset):
                  max_direction,
                  max_scale=2.,
                  train=True,
+                 patch_size_overlap_dilation=None,
                  return_segmentation=True):
 
         self.root_dataset = dataset
@@ -364,6 +366,12 @@ class ShiftDataset(Dataset):
         self.shape = tuple(int(_) for _ in shape)
         self.train = train
         self.return_segmentation = return_segmentation
+        if patch_size_overlap_dilation is not None:
+          self.patchify = Patchify(patch_size=patch_size_overlap_dilation[0],
+                                   overlap_size=patch_size_overlap_dilation[1],
+                                   dilation=patch_size_overlap_dilation[2])
+        else:
+          self.patchify = None
 
     def __len__(self):
         return len(self.root_dataset)
@@ -388,6 +396,7 @@ class ShiftDataset(Dataset):
         xoff, yoff = offset_from_direction(direction,
                                            max_direction=self.max_direction,
                                            distance=self.distance)
+        direction = np.array([direction, xoff, yoff]).astype(np.float32)
 
         x1 = x[self.distance:self.distance+self.shape[0], 
                self.distance:self.distance+self.shape[1]]
@@ -406,8 +415,11 @@ class ShiftDataset(Dataset):
         x = np.stack((x1, x2), axis=0).astype(np.float32)
         y = np.stack((y1, y2), axis=0).astype(np.float32)
 
+        if self.patchify is not None:
+          x = self.patchify(torch.from_numpy(x))
+
         if self.return_segmentation:
-            return x, direction, y 
+            return x, direction, y
         else:
             return x, direction
 

@@ -35,13 +35,14 @@ from sklearn.neighbors import KNeighborsClassifier
 import stardist
 from skimage import measure
 from scipy import ndimage
-from skimage.morphology import watershed
+from skimage.segmentation import watershed
 from skimage.io import imsave
 from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
 from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
 from lisl.pl.evaluation import compute_3class_segmentation
 from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
+from lisl.pl.utils import offset_from_direction
 # from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
 from torch.optim.lr_scheduler import MultiStepLR
@@ -71,6 +72,9 @@ class SSLTrainer(pl.LightningModule):
                        in_channels=1,
                        out_channels=3,
                        stride=2,
+                       patchsize=16,
+                       patchoverlap=5,
+                       patchdilation=1,
                        initial_lr=1e-4):
         super().__init__()
 
@@ -87,10 +91,24 @@ class SSLTrainer(pl.LightningModule):
         self.unet_type = unet_type
         self.initial_lr = initial_lr
 
+        self.patchsize = patchsize
+        self.patchoverlap = patchoverlap
+        self.patchdilation = patchdilation
+
+        self.val_train_set_size = [10, 20, 50, 100, 200, 500, 1000]
+        self.reset_val()
+
         self.distance = distance
         self.stride = stride
         self.embed_scale = 0.1
         self.build_models()
+
+    def reset_val(self):
+        self.val_metrics = {}
+        for n in self.val_train_set_size:
+            self.val_metrics[f'val_arand_{n}'] = []
+            self.val_metrics[f'val_seg_{n}'] = []
+
 
     @staticmethod
     def add_model_specific_args(parser):
@@ -105,6 +123,9 @@ class SSLTrainer(pl.LightningModule):
         parser.add_argument('--initial_lr', type=float, default=1e-4)
         parser.add_argument('--loss_name', type=str, default="CPC")
         parser.add_argument('--unet_type', type=str, default="gp")
+        parser.add_argument('--patchsize', type=int, default=16)
+        parser.add_argument('--patchoverlap', type=int, default=5)
+        parser.add_argument('--patchdilation', type=int, default=1)
 
         return parser
 
@@ -149,7 +170,11 @@ class SSLTrainer(pl.LightningModule):
         elif self.unet_type == "deeplab":
             self.unet = Deeplabv3(self.in_channels, self.hidden_channels)
         elif self.unet_type == "resnet":
-            self.unet = PatchedResnet50(self.in_channels, self.hidden_channels)
+            self.unet = PatchedResnet50(self.in_channels,
+                                        self.hidden_channels,
+                                        patchsize=self.patchsize,
+                                        overlap=self.patchoverlap,
+                                        dilation=self.patchdilation)
         else:
             raise NotImplementedError(f"model type {self.unet_type} not found")
 
@@ -506,6 +531,7 @@ class SSLTrainer(pl.LightningModule):
 
 
 
+
 class ContextPredictionTrainer(SSLTrainer):
 
 
@@ -520,25 +546,57 @@ class ContextPredictionTrainer(SSLTrainer):
                               n_hidden_layers=self.encoder_layers,
                               n_hidden=self.hidden_channels, ndim=2)
 
-    def training_step(self, batch, batch_nb):
-        x, y = batch
+    def loss_fn(self):
+        return getattr(self, "loss_" + self.loss_name)
 
-        c_split = x.shape[1] // 2
+    def loss_directionclass(self, x, y):
+        c_split = x.shape[-3] // 2
         assert(c_split > 0)
 
-        embedding = self.forward(x[:, :c_split])
-        embedding_shift = self.forward(x[:, c_split:])
+        embedding = self.forward(x[..., :c_split, :, :])
+        embedding_shift = self.forward(x[..., c_split:, :, :])
 
         stacked_emb = torch.cat((embedding, embedding_shift), dim=1)
         context_pred = self.context_mlp(stacked_emb)
 
-        expand_y = y[:, None, None].expand(y.shape[0], context_pred.shape[-2], context_pred.shape[-1])
+        expand_y = y[:, 0, None, None].long().expand(y.shape[0], context_pred.shape[-2], context_pred.shape[-1])
         loss = nn.functional.cross_entropy(context_pred, expand_y, ignore_index=-100)
+
+        return loss, embedding, embedding_shift, context_pred, expand_y
+
+    def loss_anchor(self, x, y):
+
+        print("anchor loss!!!!!!", y)
+        c_split = x.shape[-3] // 2
+        assert(c_split > 0)
+
+        embedding = self.forward(x[..., :c_split, :, :])
+        embedding_shift = self.forward(x[..., c_split:, :, :])
+
+        shift_offset = torch.zeros(embedding_shift.shape[:2] + (1, 1))
+        shift_offset[:, :2] = y[:, 1:3, None, None] / 10.
+        shift_offset = shift_offset.to(embedding_shift.device)
+
+        anchor_shift = embedding_shift - shift_offset
+        
+        loss = torch.nn.functional.mse_loss(embedding,
+                                            anchor_shift,
+                                            reduction='mean')
+
+        return loss, embedding, embedding_shift, None, None
+
+    def training_step(self, batch, batch_nb):
+        x, y = batch
+
+        loss, embedding, embedding_shift, context_pred, expand_y = self.loss_fn()(x, y)
 
         tensorboard_logs = {'train_loss': loss.detach().cpu()}
         tensorboard_logs['iteration'] = self.global_step
 
         if self.log_now():
+
+            c_split = x.shape[-3] // 2
+            assert(c_split > 0)
 
             embedding_shift = embedding_shift.detach().cpu()
             embedding = embedding.detach().cpu()
@@ -556,24 +614,26 @@ class ContextPredictionTrainer(SSLTrainer):
 
             self.logger.experiment.add_image(f'embedding', embedding_batch, self.global_step)
 
-            img_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(torch.cat((x_0[c], x_s[c]), dim=-1))) for c in range(
-                x_0.shape[0])), dim=1) for x_0, x_s in zip(x[:, :c_split].detach().cpu(), x[:, c_split:].detach().cpu())), dim=-1)
-            self.logger.experiment.add_image(f'img', img_batch, self.global_step)
+            if len(x.shape) == 4:
+                img_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(torch.cat((x_0[c], x_s[c]), dim=-1))) for c in range(
+                    x_0.shape[0])), dim=1) for x_0, x_s in zip(x[:, :c_split].detach().cpu(), x[:, c_split:].detach().cpu())), dim=-1)
+                self.logger.experiment.add_image(f'img', img_batch, self.global_step)
             # embedding_batch_shift = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(e_0[c])) for c in range(
             #     e_0.shape[0])), dim=1) for e_0 in embedding_shift.detach().cpu()), dim=-1)
             # embedding_batch = torch.cat((embedding_batch, embedding_batch_shift), dim=-1)
 
-            vis_labels = tuple(_ for _ in context_pred.detach().cpu().argmax(dim=1).numpy())
-            vis_labels = np.concatenate(vis_labels, axis=-1)
-            vis_gtlabels = tuple(_ for _ in expand_y.detach().cpu().numpy())
-            vis_gtlabels = np.concatenate(vis_gtlabels, axis=-1)
-            vis_labels = label2color(np.concatenate((vis_labels, vis_gtlabels), axis=-2))
+            if self.loss_name == "directionclass":
+                vis_labels = tuple(_ for _ in context_pred.detach().cpu().argmax(dim=1).numpy())
+                vis_labels = np.concatenate(vis_labels, axis=-1)
+                vis_gtlabels = tuple(_ for _ in expand_y.detach().cpu().numpy())
+                vis_gtlabels = np.concatenate(vis_gtlabels, axis=-1)
+                vis_labels = label2color(np.concatenate((vis_labels, vis_gtlabels), axis=-2))
 
-            self.logger.experiment.add_image(f'argmax_prediction', vis_labels, self.global_step)
+                self.logger.experiment.add_image(f'argmax_prediction', vis_labels, self.global_step)
 
-            vis_probs = tuple(context_pred[b].detach().cpu().softmax(dim=0)[y[b]].numpy() for b in range(context_pred.shape[0]))
-            vis_probs = np.concatenate(vis_labels, axis=-1)
-            self.logger.experiment.add_image(f'vis_probs', vis_probs[None], self.global_step)
+                vis_probs = tuple(context_pred[b].detach().cpu().softmax(dim=0)[y[b]].numpy() for b in range(context_pred.shape[0]))
+                vis_probs = np.concatenate(vis_labels, axis=-1)
+                self.logger.experiment.add_image(f'vis_probs', vis_probs[None], self.global_step)
 
         return {'loss': loss, 'log': tensorboard_logs}
 
@@ -587,9 +647,14 @@ class ContextPredictionTrainer(SSLTrainer):
                 if img.shape[0] in [3, 4]:
                     img = img.transpose(1, 2, 0)
                 print(os.path.join(eval_directory, name+".png"))
-                imsave(os.path.join(eval_directory, name+".png"),
-                       (img*255.).astype(np.uint8),
-                       check_contrast=False)
+                print(name, img.min(), img.max())
+                if img.max() <= 1. and img.min() >= 0.:
+                    imsave(os.path.join(eval_directory, name+".png"),
+                           (img*255.).astype(np.uint8),
+                           check_contrast=False)
+                else:
+                    imsave(os.path.join(eval_directory, name+".png"),
+                           img, check_contrast=False)
             except Exception as e:
                 print(e)
                 print("can not imsave ", img.shape)
@@ -617,6 +682,7 @@ class ContextPredictionTrainer(SSLTrainer):
         with torch.no_grad():
             with open(score_filename, "w") as scf:
 
+
                 c_split = x.shape[1] // 2
                 assert(c_split > 0)
 
@@ -625,6 +691,7 @@ class ContextPredictionTrainer(SSLTrainer):
                 embedding_torch = self.forward(x[:, :c_split])
                 if self.unet_type == "resnet":
                     embedding_torch = self.unet.predict(x[:, :c_split], device="cpu")
+
                 elif embedding_torch.shape[-1] != 256:
                     embedding_torch = self.forward(F.pad(x[:, :c_split], (72, 72, 72, 72), mode='reflect'))[:, :, 4:-4, 4:-4]
 
@@ -634,7 +701,7 @@ class ContextPredictionTrainer(SSLTrainer):
                 del y
 
                 embedding = np.transpose(embedding, (1,0,2,3))
-                self.log_img(f'embedding_0_2', embedding[:3, -1], eval_directory=eval_directory)
+                # self.log_img(f'embedding_0_2', embedding[:3, -1], eval_directory=eval_directory)
                 C, _, W, H = embedding.shape
 
                 pca_in = embedding[:, -1].reshape(C, -1).T
@@ -653,7 +720,7 @@ class ContextPredictionTrainer(SSLTrainer):
                 # expand_y = y[:, None, None].expand(y.shape[0], context_pred.shape[-2], context_pred.shape[-1])
                 # loss = nn.functional.cross_entropy(context_pred, expand_y, ignore_index=-100)
 
-                tensorboard_logs = {'val_loss': 0}#loss.detach()}
+                tensorboard_logs = {}#'val_loss': loss.detach()}
                 tensorboard_logs['iteration'] = self.global_step
 
                 train_stardist = np.stack(
@@ -663,29 +730,38 @@ class ContextPredictionTrainer(SSLTrainer):
                 # classes 0: boundaries, 1: inner_cell, 2: background
                 threeclass = (2 * background) + inner
 
-                for n_samples in [5, 10, 20, 50, 100, 200, 500, 1000]:
+                fg_mask = labels > 0
+                bg_mask = labels == 0
 
-                    ##########TODO###########
-                    # Find a more efficient way to sample random fg and bg points
+                dist_transform = \
+                    np.stack(ndimage.morphology.distance_transform_edt(_) for _ in bg_mask)
+                dist_mask = np.exp( - dist_transform / 8) > np.random.rand(*bg_mask.shape)
+                bg_train_mask = np.logical_and(bg_mask, dist_mask)
 
-                    fg_mask = labels > 0
-                    bg_mask = labels == 0
+                self.log_img(f'dist_mask', dist_mask[None, -1], eval_directory=eval_directory)
+                self.log_img(f'bg_train_mask', bg_train_mask[None, -1], eval_directory=eval_directory)
+
+                bg_indices = list(zip(*np.where(bg_train_mask)))
+                c0_indices = list(zip(*np.where(threeclass == 0)))
+                c1_indices = list(zip(*np.where(threeclass == 1)))
+
+                random.Random(3).shuffle(c0_indices)
+                random.Random(4).shuffle(c1_indices)
+                random.Random(5).shuffle(bg_indices)
+
+                for n_samples in self.val_train_set_size:
 
                     train_mask = np.zeros(fg_mask.shape, dtype=np.bool)
-
-                    fg_indices = list(zip(*np.where(fg_mask)))
-                    random.Random(4).shuffle(fg_indices)
                     # shuffle is identical in every run
-                    for b0, x0, y0 in itertools.islice(fg_indices, 0, n_samples):
+                    for b0, x0, y0 in itertools.islice(c0_indices, 0, n_samples):
                         train_mask[b0, x0, y0] = 1
 
-                    bg_indices = list(zip(*np.where(bg_mask)))
-                    random.Random(5).shuffle(bg_indices)
+                    for b0, x0, y0 in itertools.islice(c1_indices, 0, n_samples):
+                        train_mask[b0, x0, y0] = 1
+
                     # shuffle is identical in every run
                     for b0, x0, y0 in itertools.islice(bg_indices, 0, n_samples):
                         train_mask[b0, x0, y0] = 1
-
-                    ##########TODO###########
 
                     training_data = embedding[:, train_mask].T
                     train_labels = threeclass[train_mask]
@@ -724,16 +800,18 @@ class ContextPredictionTrainer(SSLTrainer):
 
                     self.log_img(f'instances_val_{n_samples}', label2color(predicted_seg[-1]), eval_directory=eval_directory)
 
-                    self.logger.log_metrics({f"arand_n={n_samples}": arand_score,
-                                             f"seg_n={n_samples}": seg_score}, step=self.global_step)
-
                     tensorboard_logs[f"arand_n={n_samples}"] = arand_score
                     tensorboard_logs[f"seg_n={n_samples}"] = seg_score
 
-
+                    self.val_metrics[f'val_arand_{n_samples}'].append(arand_score)
+                    self.val_metrics[f'val_seg_{n_samples}'].append(seg_score)
 
         return tensorboard_logs
 
+    def validation_epoch_end(self, outs):
+        metrics = dict((k, np.mean(self.val_metrics[k])) for k in self.val_metrics)
+        self.logger.log_metrics(metrics, step=self.global_step)
+        self.reset_val()
 
     def loss_context_prediction(self, y, embedding):
 

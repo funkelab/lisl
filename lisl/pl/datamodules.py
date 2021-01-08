@@ -142,7 +142,8 @@ class DSBDataModule(pl.LightningDataModule):
 
     def __init__(self, batch_size, dspath,
                  shape=(256, 256), loader_workers=10,
-                 max_direction=8, context_distance=32, upsample=2.):
+                 max_direction=8, context_distance=32,
+                 upsample=2., patch_size_overlap_dilation=None):
 
         super().__init__()
         self.batch_size = batch_size
@@ -152,6 +153,11 @@ class DSBDataModule(pl.LightningDataModule):
         self.max_direction = max_direction
         self.context_distance = context_distance
         self.upsample = upsample
+        self.patch_size_overlap_dilation = patch_size_overlap_dilation
+        if self.patch_size_overlap_dilation is not None:
+            # patch_size_overlap_dilation, when read from commandline might be a string
+            # we cast to int, just in case
+            self.patch_size_overlap_dilation = tuple(int(_) for _ in patch_size_overlap_dilation)
 
     def setup(self, stage=None):
 
@@ -162,7 +168,8 @@ class DSBDataModule(pl.LightningDataModule):
                                 self.max_direction,
                                 self.upsample,
                                 train=True,
-                                return_segmentation=False)
+                                return_segmentation=False,
+                                patch_size_overlap_dilation=self.patch_size_overlap_dilation)
 
         self.ds_val = ShiftDataset(
                                 DSBDataset(self.dspath),
@@ -203,5 +210,6 @@ class DSBDataModule(pl.LightningDataModule):
         parser.add_argument('--max_direction', type=int, default=8)
         # parser.add_argument('--add_sparse_mosaic_channel', action='store_true', )
         parser.add_argument('--context_distance', type=int, default=128)
+        parser.add_argument('--patch_size_overlap_dilation', nargs='*', default=None)
 
         return parser

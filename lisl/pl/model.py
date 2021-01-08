@@ -12,7 +12,7 @@ from torchvision import datasets, transforms, models
 
 import numpy as np
 import scipy.sparse as sparse
-from pl_bolts.transforms.self_supervised.ssl_transforms import Patchify
+from lisl.pl.utils import Patchify
 import math
 
 class UnPatchify(object):
@@ -53,7 +53,8 @@ class PatchedResnet50(nn.Module):
             in_channels,
             out_channels,
             patchsize=16,
-            overlap=11):
+            overlap=5,
+            dilation=1):
 
         super().__init__()
 
@@ -75,11 +76,21 @@ class PatchedResnet50(nn.Module):
 
         self.resnet = model
         self.patchsize = patchsize
-        self.patch = Patchify(patch_size=patchsize, overlap_size=overlap)
-        self.pred_patch = Patchify(patch_size=patchsize, overlap_size=patchsize-1)
+        self.dilation = dilation
+        self.patch = Patchify(patch_size=patchsize,
+                              overlap_size=overlap,
+                              dilation=dilation)
+        self.pred_patch = Patchify(patch_size=patchsize,
+                              overlap_size=patchsize-1,
+                              dilation=dilation)
 
     def forward(self, x):
-        patches = torch.stack(list(self.patch(x0) for x0 in x))
+
+        if x.shape[-1] != self.patchsize:
+            patches = torch.stack(list(self.patch(x0) for x0 in x))
+        else:
+            patches = x
+
         assert patches.shape[-2] == patches.shape[-1]
 
         b, p, c, pw, ph = patches.shape
@@ -92,15 +103,14 @@ class PatchedResnet50(nn.Module):
         out = out.view((b, p, -1))
         cout = out.shape[-1]
         out = out.permute(0, 2, 1).view(b, cout, w, h)
-        print(out.shape)
         return out
 
     def predict(self, x, device=None):
         """ Densly predict the embedding for every pixel in x
         To save memory, Each scanline is predicted individually and stacked together"""
 
-        lp = self.patchsize // 2
-        rp = (self.patchsize - 1) // 2
+        lp = (self.patchsize // 2) * self.dilation
+        rp = ((self.patchsize - 1) // 2) * self.dilation
 
         # padd the image to get one patch corresponding to each pixel 
         padded = F.pad(x, (lp, rp, lp, rp), mode='reflect')
@@ -109,7 +119,7 @@ class PatchedResnet50(nn.Module):
 
             out = []
             for i in range(x.shape[-2]):
-                patches = torch.stack(list(self.pred_patch(x0) for x0 in padded[:, :, i:i+self.patchsize]))
+                patches = torch.stack(list(self.pred_patch(x0) for x0 in padded[:, :, i:i+(self.patchsize * self.dilation)]))
                 b, p, c, pw, ph = patches.shape
                 patches = patches.view(b*p, c, pw, ph)
                 pred_i = self.resnet(patches)

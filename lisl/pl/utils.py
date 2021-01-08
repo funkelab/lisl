@@ -8,6 +8,7 @@ import scipy.sparse as sparse
 import gunpowder as gp
 import matplotlib
 import random
+from torch.nn import functional as F
 
 def offset_slice(offset, reverse=False, extra_dims=0):
     def shift(o):
@@ -285,3 +286,36 @@ class AbsolutIntensityAugment(gp.nodes.BatchFilter):
 
         return a*scale + shift
 
+
+class Patchify(object):
+    """ Adapted from 
+    https://github.com/PyTorchLightning/pytorch-lightning-bolts/blob/8a4cf8f61644c28d6df54ccffe3a52d6f5fce5a6/pl_bolts/transforms/self_supervised/ssl_transforms.py#L62
+    This implementation adds a dilation parameter
+    """
+
+
+    def __init__(self, patch_size, overlap_size, dilation):
+        self.patch_size = patch_size
+        self.overlap_size = self.patch_size - overlap_size
+        self.dilation = dilation
+
+    def __call__(self, x):
+        x = x.unsqueeze(0)
+        b, c, h, w = x.size()
+
+        # patch up the images
+        # (b, c, h, w) -> (b, c*patch_size, L)
+        x = F.unfold(x,
+            kernel_size=self.patch_size,
+            stride=self.overlap_size,
+            dilation=self.dilation)
+
+        # (b, c*patch_size, L) -> (b, nb_patches, width, height)
+        x = x.transpose(2, 1).contiguous().view(b, -1, self.patch_size, self.patch_size)
+
+        # reshape to have (b x patches, c, h, w)
+        x = x.view(-1, c, self.patch_size, self.patch_size)
+
+        x = x.squeeze(0)
+
+        return x
