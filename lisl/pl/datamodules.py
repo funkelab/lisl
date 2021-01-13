@@ -189,7 +189,8 @@ class DSBDataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(self.ds_val,
-                          batch_size=2,
+                          batch_size=1,
+                          shuffle=False,
                           num_workers=self.loader_workers,
                           drop_last=True)
 
