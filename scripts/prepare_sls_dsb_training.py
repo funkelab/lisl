@@ -17,40 +17,40 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for lr in [1e-5]:
-      for context_distance in [16, 8, 20, 24]:
-        for patchsize in [16, 24, 32]:
+    for lr in [5e-5, 1e-4, 1e-5]:
+      for context_distance in [4, 8, 16, 24, 32, 64, 96, 128]:
+        for patchsize in [16, 24, 32, 64, 96, 128]:
+            #for loss_name in ["anchor"]:#directionclass"]:#"anchor"
         # for patchdilation in [1, 2, 3, 4]:
 
           # for unet_type, test_out_shape, test_input_name, hidden_channels, bs in zip(["gp", "dunet", "deeplab"], ["120 120", "256 256", "256 256"], ["x", "input_", "x"], [137, 137, 137], [16, 16, 2]):
+            loss_name = "anchor"
+            unet_type = "resnet"
+            test_out_shape = "49, 49"
+            test_input_name = "x"
+            hidden_channels = 137
+            patchoverlap = 5
+            patchdilation = 1
+            hidden_channels = 3
 
-          unet_type = "resnet"
-          test_out_shape = "49, 49"
-          test_input_name = "x"
-          hidden_channels = 137
-          patchoverlap = 5
-          patchdilation = 1
-          hidden_channels = 3
+            args = options.args + f" --initial_lr {lr}"
+            args += f" --unet_type {unet_type}"
+            args += f" --hidden_channels {hidden_channels}"
+            args += f" --context_distance {context_distance}"
+            args += f" --patch_size_overlap_dilation {patchsize} {patchoverlap} {patchdilation}"
+            args += f" --patchsize {patchsize}"
+            args += f" --patchoverlap {patchoverlap}"
+            args += f" --patchdilation {patchdilation}"
+            args += f" --loss_name {loss_name}"
 
+            set_up_experiment(options.base_dir,
+                              options.pybin,
+                              options.experiment_library,
+                              options.script,
+                              options.experiment,
+                              experiment_number,
+                              options.cleanup,
+                              args)
 
-          args = options.args + f" --initial_lr {lr}"
-          args += f" --unet_type {unet_type}"
-          args += f" --hidden_channels {hidden_channels}"
-          args += f" --context_distance {context_distance}"
-          args += f" --patch_size_overlap_dilation {patchsize} {patchoverlap} {patchdilation}"
-          args += f" --patchsize {patchsize}"
-          args += f" --patchoverlap {patchoverlap}"
-          args += f" --patchdilation {patchdilation}"
-          args += f" --loss_name anchor"
-
-          set_up_experiment(options.base_dir,
-                            options.pybin,
-                            options.experiment_library,
-                            options.script,
-                            options.experiment,
-                            experiment_number,
-                            options.cleanup,
-                            args)
-
-          experiment_number += 1
+            experiment_number += 1
 
