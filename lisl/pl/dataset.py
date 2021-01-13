@@ -18,6 +18,10 @@ from skimage.transform import rescale
 from lisl.pl.utils import Patchify
 import torch
 
+from inferno.io.transform import Compose
+from inferno.io.transform.image import (RandomRotate, ElasticTransform,
+  AdditiveGaussianNoise, RandomTranspose, RandomFlip, FineRandomRotations)
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -328,6 +332,7 @@ class DSBDataset(Dataset):
         print(self.Y[0].shape)
 
     def __getitem__(self, index):
+        print("out out ", self.X[index].shape, self.Y[index].shape)
         return self.X[index], self.Y[index]
 
     def __len__(self):
@@ -366,6 +371,9 @@ class ShiftDataset(Dataset):
         self.shape = tuple(int(_) for _ in shape)
         self.train = train
         self.return_segmentation = return_segmentation
+
+        self.train_transforms, self.fine_transforms = self.get_transforms()
+
         if patch_size_overlap_dilation is not None:
           self.patchify = Patchify(patch_size=patch_size_overlap_dilation[0],
                                    overlap_size=patch_size_overlap_dilation[1],
@@ -376,6 +384,17 @@ class ShiftDataset(Dataset):
     def __len__(self):
         return len(self.root_dataset)
 
+    def get_transforms(self):
+        global_transforms = Compose(RandomRotate(),
+                             RandomTranspose(),
+                             RandomFlip(),
+                             ElasticTransform(alpha=2000., sigma=50.),
+                             AdditiveGaussianNoise(sigma=0.05))
+
+        fine_transforms = ElasticTransform(alpha=2000., sigma=50.)
+
+        return global_transforms, fine_transforms
+
     def __getitem__(self, index):
 
         x,y = self.root_dataset[index]
@@ -383,10 +402,14 @@ class ShiftDataset(Dataset):
 
         if self.train:
             factor = 1. + self.max_scale * np.random.rand()
+
+            print(x.shape, y.shape)
+
             x = rescale(x, factor, order=1)
-            y = rescale(x, factor, order=0)
-            # TODO: add general augmentations here
-            # e.g. ElasticAugment
+            y = rescale(y, factor, order=0)
+
+            print(x.shape, y.shape)
+            x, y = self.train_transforms(x, y)
 
         # reflection padding to make all shifts viable
         x = np.pad(x, self.distance, mode='reflect')
@@ -409,6 +432,8 @@ class ShiftDataset(Dataset):
                self.distance+yoff:self.distance+self.shape[1]+yoff]
         
         if self.train:
+            x1 = self.fine_transforms(x1)
+            x2 = self.fine_transforms(x2)
             x1 = augment(x1)
             x2 = augment(x2)
 

@@ -17,14 +17,14 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for lr in [4e-5, 1e-4, 1e-5]:
-      for context_distance in [4, 8, 16, 32, 64, 128]:
-        for patchsize in [16, 32, 64, 128]:
-          for loss_name in ["directionclass"]:#"anchor"
+    for lr in [5e-5, 1e-4, 1e-5]:
+      for context_distance in [4, 8, 16, 24, 32, 64, 96, 128]:
+        for patchsize in [16, 24, 32, 64, 96, 128]:
+            #for loss_name in ["anchor"]:#directionclass"]:#"anchor"
         # for patchdilation in [1, 2, 3, 4]:
 
           # for unet_type, test_out_shape, test_input_name, hidden_channels, bs in zip(["gp", "dunet", "deeplab"], ["120 120", "256 256", "256 256"], ["x", "input_", "x"], [137, 137, 137], [16, 16, 2]):
-
+            loss_name = "anchor"
             unet_type = "resnet"
             test_out_shape = "49, 49"
             test_input_name = "x"

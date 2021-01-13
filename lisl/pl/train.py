@@ -37,12 +37,15 @@ class Timing(Callback):
 
     def get_memory_stats(self, pl_module):
         if self.log_memory:
-            pl_module.logger.log_metrics({"reserved_bytes.all.current": 
-                torch.cuda.memory_stats()["reserved_bytes.all.current"] / 2**30},
-                step=pl_module.global_step)
-            pl_module.logger.log_metrics({"reserved_bytes.all.peak": 
-                torch.cuda.memory_stats()["reserved_bytes.all.peak"] / 2**30},
-                step=pl_module.global_step)
+            try:
+                pl_module.logger.log_metrics({"reserved_bytes.all.current": 
+                    torch.cuda.memory_stats()["reserved_bytes.all.current"] / 2**30},
+                    step=pl_module.global_step)
+                pl_module.logger.log_metrics({"reserved_bytes.all.peak": 
+                    torch.cuda.memory_stats()["reserved_bytes.all.peak"] / 2**30},
+                    step=pl_module.global_step)
+            except:
+                pass
             
 
     def on_train_batch_start(self, trainer, pl_module, *args):
