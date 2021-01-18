@@ -15,7 +15,7 @@ import logging
 import os
 from tifffile import imread as tiffread
 from skimage.transform import rescale
-from lisl.pl.utils import Patchify
+from lisl.pl.utils import Patchify, random_offset
 import torch
 
 from inferno.io.transform import Compose
@@ -415,11 +415,18 @@ class ShiftDataset(Dataset):
         x = np.pad(x, self.distance, mode='reflect')
         y = np.pad(y, self.distance, mode='constant', constant_values=-1)
 
-        direction = random.randrange(0, self.max_direction)
-        xoff, yoff = offset_from_direction(direction,
-                                           max_direction=self.max_direction,
-                                           distance=self.distance)
+        if self.max_direction > 0:
+          direction = random.randrange(0, self.max_direction)
+          xoff, yoff = offset_from_direction(direction,
+                                             max_direction=self.max_direction,
+                                             distance=self.distance)
+        else:
+          direction = 0
+          xoff, yoff = random_offset(self.distance)
+
         direction = np.array([direction, xoff, yoff]).astype(np.float32)
+
+
 
         x1 = x[self.distance:self.distance+self.shape[0], 
                self.distance:self.distance+self.shape[1]]
