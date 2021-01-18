@@ -191,7 +191,14 @@ def offset_from_direction(direction, max_direction=8., distance=10):
 
     return x_offset, y_offset
 
-#  gradient vis funtion
+def random_offset(distance=10):
+    angle = 2 * np.pi * np.random.uniform()
+    distance = np.random.uniform(low=1., high=distance)
+
+    x_offset = int(distance * np.sin(angle))
+    y_offset = int(distance * np.cos(angle))
+
+    return x_offset, y_offset
 
 # if y_hat.requires_grad:
 #     def log_hook(grad_input):
