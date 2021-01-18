@@ -17,9 +17,9 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for lr in [5e-5, 1e-4, 1e-5]:
-      for context_distance in [4, 8, 16, 24, 32, 64, 96, 128]:
-        for patchsize in [16, 24, 32, 64, 96, 128]:
+    for lr in [1e-4]:
+      for context_distance in [4, 8, 16, 32, 64, 128]:
+        for patchsize in [16, 32, 64, 128]:
             #for loss_name in ["anchor"]:#directionclass"]:#"anchor"
         # for patchdilation in [1, 2, 3, 4]:
 
@@ -42,6 +42,7 @@ if __name__ == '__main__':
             args += f" --patchoverlap {patchoverlap}"
             args += f" --patchdilation {patchdilation}"
             args += f" --loss_name {loss_name}"
+            args += f" --max_direction 0"
 
             set_up_experiment(options.base_dir,
                               options.pybin,

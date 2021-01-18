@@ -332,7 +332,6 @@ class DSBDataset(Dataset):
         print(self.Y[0].shape)
 
     def __getitem__(self, index):
-        print("out out ", self.X[index].shape, self.Y[index].shape)
         return self.X[index], self.Y[index]
 
     def __len__(self):

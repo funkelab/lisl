@@ -1,5 +1,6 @@
 import argparse
 import pytorch_lightning as pl
+import torch
 from torch.utils.data import DataLoader
 from lisl.pl.dataset import ShiftDataset, SparseChannelDataset, RandomShiftDataset, DSBDataset
 
@@ -166,8 +167,7 @@ class DSBDataModule(pl.LightningDataModule):
         val_set_size = len(full_ds) - train_set_size
         dsb_train, dsb_val = torch.utils.data.random_split(
                                 full_ds, 
-                                [train_set_size, val_set_size],
-                                generator=torch.Generator().manual_seed(42))
+                                [train_set_size, val_set_size])
 
         self.ds_train = ShiftDataset(
                                 dsb_train,

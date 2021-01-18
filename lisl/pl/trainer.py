@@ -149,6 +149,28 @@ class SSLTrainer(pl.LightningModule):
     def forward(self, x):
         return self.unet(x)
 
+    def predict(self, x):
+
+        self.unet = self.unet.eval()
+
+        c_split = x.shape[-3] // 2
+        assert(c_split > 0)
+
+        if self.unet_type == "resnet":
+            e = self.unet.predict(x[:, :c_split], device="cpu")
+            eshifted = self.unet.predict(x[:, c_split:], device="cpu")
+        elif self.unet_type == "gp":
+            assert(x.shape[-2:] == 256)
+            e = self.forward(F.pad(x[:, :c_split], (72, 72, 72, 72), mode='reflect'))[:, :, 4:-4, 4:-4]
+            eshifted = self.forward(F.pad(x[:, c_split:], (72, 72, 72, 72), mode='reflect'))[:, :, 4:-4, 4:-4]
+        else:
+            e = self.forward(x[:, :c_split])
+            eshifted = self.forward(x[:, c_split:])
+
+        self.unet = self.unet.train()
+        return e, eshifted
+                    
+
     def build_models(self):
 
         dsf, ks = get_unet_kernels(self.ndim)
@@ -565,13 +587,45 @@ class ContextPredictionTrainer(SSLTrainer):
 
         return loss, embedding, embedding_shift, context_pred, expand_y
 
-    def loss_anchor(self, x, y):
+    def flip_augmented_forward(self, x):
+
+        flip_x, flip_y, flip_dims = random.choice([
+             (1, 1, []),
+             (-1, 1, [-2]),
+             (1, -1, [-1]),
+             (-1, -1, [-1, -2])])
+
+        # flip image patches randomly
+        if len(flip_dims) > 0:
+            x = torch.flip(x, flip_dims)
+        
+        # predict anchor embedding
+        e = self.forward(x.detach())
+
+        # flip the predicted tensors back
+        e = torch.cat((e[:, 0:1]  * flip_x,
+                       e[:, 1:2] * flip_y, 
+                       e[:, 2:]), dim=1)
+
+        return e
+
+    def loss_anchor(self, x, y, 
+                    embedding=None,
+                    embedding_shift=None,
+                    augment=True):
 
         c_split = x.shape[-3] // 2
         assert(c_split > 0)
 
-        embedding = self.forward(x[..., :c_split, :, :])
-        embedding_shift = self.forward(x[..., c_split:, :, :])
+        if augment:
+            forward_call = self.flip_augmented_forward
+        else:
+            forward_call = self.forward
+        
+        if embedding is None:
+            embedding = forward_call(x[..., :c_split, :, :])
+        if embedding_shift is None:
+            embedding_shift = forward_call(x[..., c_split:, :, :])
 
         shift_offset = torch.zeros(embedding_shift.shape[:2] + (1, 1))
         shift_offset[:, :2] = y[:, 1:3, None, None] / 4.
@@ -693,7 +747,6 @@ class ContextPredictionTrainer(SSLTrainer):
                                                       f"{self.global_step:08d}"))
         
         x, y, labels_torch = batch
-
         labels = labels_torch[:, 0].cpu().numpy()
         del labels_torch
 
@@ -711,23 +764,17 @@ class ContextPredictionTrainer(SSLTrainer):
         with torch.no_grad():
             with open(score_filename, "w") as scf:
 
+                embedding_torch, embedding_shift = self.predict(x)
+                loss, _, _, _, _ = self.loss_fn()(x, y, 
+                            embedding=embedding_torch,
+                            embedding_shift=embedding_shift)
 
-                c_split = x.shape[1] // 2
-                assert(c_split > 0)
+                embedding = embedding_torch.detach().cpu().numpy() 
 
-                # embedding = self.forward(x[:, :c_split])
-                # TODO: expose padding parameters
-                embedding_torch = self.forward(x[:, :c_split])
-                if self.unet_type == "resnet":
-                    self.unet = self.unet.eval()
-                    embedding_torch = self.unet.predict(x[:, :c_split], device="cpu")
-                    self.unet = self.unet.train()
-
-                elif embedding_torch.shape[-1] != 256:
-                    embedding_torch = self.forward(F.pad(x[:, :c_split], (72, 72, 72, 72), mode='reflect'))[:, :, 4:-4, 4:-4]
-
-                embedding = embedding_torch.detach().cpu().numpy()                
+                # free memory immediately
+                loss = loss.detach()
                 del embedding_torch
+                del embedding_shift
                 del x
                 del y
 
@@ -835,8 +882,7 @@ class ContextPredictionTrainer(SSLTrainer):
                     self.val_metrics[f'val_arand_{n_samples}'].append(arand_score)
                     self.val_metrics[f'val_seg_{n_samples}'].append(seg_score)
                     
-        return tensorboard_logs
-        return {'val_loss': torch.Tensor([0.]), 'log': tensorboard_logs}
+        return {'val_loss': loss, 'log': tensorboard_logs}
 
     def validation_epoch_end(self, outs):
         metrics = dict((k, np.mean(self.val_metrics[k])) for k in self.val_metrics)
