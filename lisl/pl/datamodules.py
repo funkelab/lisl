@@ -161,8 +161,16 @@ class DSBDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
 
+        full_ds = DSBDataset(self.dspath)
+        train_set_size = int(len(full_ds) * 0.9)
+        val_set_size = len(full_ds) - train_set_size
+        dsb_train, dsb_val = torch.utils.data.random_split(
+                                full_ds, 
+                                [train_set_size, val_set_size],
+                                generator=torch.Generator().manual_seed(42))
+
         self.ds_train = ShiftDataset(
-                                DSBDataset(self.dspath),
+                                dsb_train,
                                 self.shape,
                                 self.context_distance,
                                 self.max_direction,
@@ -172,7 +180,7 @@ class DSBDataModule(pl.LightningDataModule):
                                 patch_size_overlap_dilation=self.patch_size_overlap_dilation)
 
         self.ds_val = ShiftDataset(
-                                DSBDataset(self.dspath),
+                                dsb_val,
                                 self.shape,
                                 self.context_distance,
                                 self.max_direction,
