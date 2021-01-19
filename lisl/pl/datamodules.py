@@ -219,6 +219,7 @@ class DSBDataModule(pl.LightningDataModule):
         parser.add_argument('--max_direction', type=int, default=8)
         # parser.add_argument('--add_sparse_mosaic_channel', action='store_true', )
         parser.add_argument('--context_distance', type=int, default=128)
+        parser.add_argument('--upsample', type=int, default=2.)
         parser.add_argument('--patch_size_overlap_dilation', nargs='*', default=None)
 
         return parser

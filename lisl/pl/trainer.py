@@ -1,6 +1,5 @@
 import os
 import logging
-from argparse import ArgumentParser
 from collections import OrderedDict
 
 import torch
@@ -20,10 +19,8 @@ from radam import RAdam
 import time
 import numpy as np
 from skimage.io import imsave
-
-import functools
-import inspect
 from tiktorch.models.dunet import DUNet
+import math
 
 import itertools
 import os
@@ -37,17 +34,16 @@ from skimage import measure
 from scipy import ndimage
 from skimage.segmentation import watershed
 from skimage.io import imsave
-from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
+from lisl.pl.utils import (adapted_rand, vis, 
+    label2color, try_remove, BuildFromArgparse, offset_from_direction)
 from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
 from lisl.pl.evaluation import compute_3class_segmentation
-from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
-from lisl.pl.utils import offset_from_direction
 # from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
 from torch.optim.lr_scheduler import MultiStepLR
 import h5py
-from lisl.pl.utils import vis, offset_slice, label2color
+from lisl.pl.utils import vis, offset_slice, label2color, visnorm
 
 # from segmentation_models_pytorch.deeplabv3.model import DeepLabV3Plus
 
@@ -62,7 +58,7 @@ class Deeplabv3(nn.Module):
     def forward(self, x):
         return self.unet(x)['out']
 
-class SSLTrainer(pl.LightningModule):
+class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     def __init__(self, loss_name="CPC",
                        unet_type="gp",
                        distance=8,
@@ -76,7 +72,8 @@ class SSLTrainer(pl.LightningModule):
                        patchsize=16,
                        patchoverlap=5,
                        patchdilation=1,
-                       initial_lr=1e-4):
+                       initial_lr=1e-4,
+                       lr_milestones=(100)):
         super().__init__()
 
         self.save_hyperparameters()
@@ -91,6 +88,7 @@ class SSLTrainer(pl.LightningModule):
         self.loss_name = loss_name
         self.unet_type = unet_type
         self.initial_lr = initial_lr
+        self.lr_milestones = list(int(_) for _ in lr_milestones)
 
         self.patchsize = patchsize
         self.patchoverlap = patchoverlap
@@ -107,6 +105,7 @@ class SSLTrainer(pl.LightningModule):
     def reset_val(self):
         self.val_metrics = {}
         for n in self.val_train_set_size:
+            self.val_metrics['validation_loss'] = []
             self.val_metrics[f'val_arand_{n}'] = []
             self.val_metrics[f'val_seg_{n}'] = []
 
@@ -127,24 +126,9 @@ class SSLTrainer(pl.LightningModule):
         parser.add_argument('--patchsize', type=int, default=16)
         parser.add_argument('--patchoverlap', type=int, default=5)
         parser.add_argument('--patchdilation', type=int, default=1)
+        parser.add_argument('--lr_milestones', nargs='*', default=[200])
 
         return parser
-
-    @classmethod
-    def from_argparse_args(cls, args, **kwargs):
-
-        if isinstance(args, ArgumentParser):
-            args = cls.parse_argparser(args)
-        params = vars(args)
-
-        # we only want to pass in valid DataModule args, the rest may be user specific
-        valid_kwargs = inspect.signature(cls.__init__).parameters
-        datamodule_kwargs = dict(
-            (name, params[name]) for name in valid_kwargs if name in params
-        )
-        datamodule_kwargs.update(**kwargs)
-
-        return cls(**datamodule_kwargs)
 
     def forward(self, x):
         return self.unet(x)
@@ -212,6 +196,7 @@ class SSLTrainer(pl.LightningModule):
                               n_hidden=self.hidden_channels, ndim=2)
 
     def loss_fn(self):
+        # return loss function by name
         return getattr(self, "loss_" + self.loss_name)
 
     def training_step(self, batch, batch_nb):
@@ -230,12 +215,6 @@ class SSLTrainer(pl.LightningModule):
                 "target_hist", y[..., ::3, ::11, ::11].detach().cpu(), self.global_step)
             self.logger.experiment.add_histogram(
                 "embedding_hist", embedding[..., ::3, ::11, ::11].detach().cpu(), self.global_step)
-            x_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(x_0[c])) for c in range(
-                x_0.shape[0])), dim=1) for x_0 in x.detach().cpu()), dim=-1)
-            self.logger.experiment.add_image(f'x', x_batch, self.global_step)
-            y_batch = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(y_0[c])) for c in range(
-                y_0.shape[0])), dim=1) for y_0 in y.detach().cpu()), dim=-1)
-            self.logger.experiment.add_image(f'y', y_batch, self.global_step)
 
             self.log_batch_images(x, y, y_hat, embedding, "train")
 
@@ -251,14 +230,9 @@ class SSLTrainer(pl.LightningModule):
 
         return {'val_loss': loss}
 
-    # def validation_end(self, outputs):
-    #     avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-    #     tensorboard_logs = {'val_loss': avg_loss}
-    #     return {'avg_val_loss': avg_loss, 'log': tensorboard_logs}
-
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.initial_lr)
-        scheduler = MultiStepLR(optimizer, milestones=[200], gamma=0.1)
+        scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
         return [optimizer], [scheduler]
 
     def squeeze(self, inp):
@@ -421,7 +395,6 @@ class SSLTrainer(pl.LightningModule):
 
     def loss_CPCshift(self, y, embedding, offsets):
 
-
         if self.stride > 0:
             xrshift = random.randint(0, self.stride)
             yrshift = random.randint(0, self.stride)
@@ -469,18 +442,12 @@ class SSLTrainer(pl.LightningModule):
         labels = coordinate + x_offset + (y_offset * w)
 
         # check that coordinate + x_offset is within bounds
+        # set to ignore label -100 if oob
         labels[r1 + x_offset < 0] = -100
         labels[r1 + x_offset >= w] = -100
         # check that coordinate + y_offset is within bounds
         labels[c1 + y_offset < 0] = -100
         labels[c1 + y_offset >= h] = -100
-
-        # # check that coordinate + x_offset is within bounds
-        # labels[r1 - abs(x_offset) < 0] = -100
-        # labels[r1 + abs(x_offset) >= w] = -100
-        # # check that coordinate + y_offset is within bounds
-        # labels[c1 - abs(y_offset) < 0] = -100
-        # labels[c1 + abs(y_offset) >= h] = -100
 
         labels = labels.to(logits.device)
         loss = nn.functional.cross_entropy(logits, labels, ignore_index=-100)
@@ -587,56 +554,78 @@ class ContextPredictionTrainer(SSLTrainer):
 
         return loss, embedding, embedding_shift, context_pred, expand_y
 
-    def flip_augmented_forward(self, x):
+    def flip_forward_flip(self, x):
+
+        # x.shape = (b * n, c, s_1, ..., s_d)
 
         flip_x, flip_y, flip_dims = random.choice([
-             (1, 1, []),
              (-1, 1, [-2]),
              (1, -1, [-1]),
              (-1, -1, [-1, -2])])
 
-        # flip image patches randomly
-        if len(flip_dims) > 0:
-            x = torch.flip(x, flip_dims)
+        x = torch.flip(x, flip_dims)
         
         # predict anchor embedding
         e = self.forward(x.detach())
+        # e.shape = (b * n, d)
 
         # flip the predicted tensors back
-        e = torch.cat((e[:, 0:1]  * flip_x,
-                       e[:, 1:2] * flip_y, 
-                       e[:, 2:]), dim=1)
+        e[:, 0] *= flip_x
+        e[:, 1] *= flip_y
+        # Todo: remove if above works
+        # e = torch.cat((e[:, 0:1] * flip_x,
+        #                e[:, 1:2] * flip_y,
+        #                e[:, 2:]), dim=1)
 
         return e
 
+
+
     def loss_anchor(self, x, y, 
-                    embedding=None,
-                    embedding_shift=None,
-                    augment=True):
+                    embedding_0=None,
+                    embedding_1=None):
+
+        # x patched input images of shape (batch * num_patches, 2*channels, width, height)
+        # y array of shape (batch, 3) each batch contains [direction_class, x_offset, y_offset]
 
         c_split = x.shape[-3] // 2
         assert(c_split > 0)
+        x_patch_0 = x[..., :c_split, :, :]
+        x_patch_1 = x[..., c_split:, :, :]
+        # x_patch_{i}.shape = (b * n, s_1, ... , s_d)
+        # y.shape = (b, d + 1)  ("+1" is not needed here)
+        
+        if embedding_0 is None: 
+            embedding_0 = self.forward(x_patch_0)
+            # embedding_0.shape = (b, d, n_1, ..., n_d)
+            # where n_1 * ... * n_d = n
 
-        if augment:
-            forward_call = self.flip_augmented_forward
+            # regularization by enforcing flip equivalence
+            embedding_0_inv = self.flip_forward_flip(x_patch_0)
+            # embedding_0_inv.shape (b, d, n_1, ..., n_d)
+
+            reg_loss = torch.nn.functional.mse_loss(embedding_0,
+                                                    embedding_0_inv)
         else:
-            forward_call = self.forward
+            reg_loss = 0.
+
+        if embedding_1 is None:
+            embedding_1 = self.forward(x_patch_1)
+
+        offset_0_to_1 = torch.zeros(embedding_1.shape[:2] + (1, 1))
+        # offset_0_to_1.shape = (b, d, 1, 1)
+        # y.shape = (b, d)
+        offset_0_to_1[:, :2] = y[:, 1:3, None, None]
+        offset_0_to_1 = offset_0_to_1.to(embedding_1.device)
+
+        # embedding_1_shift = embedding_1 + (p_1 - p_0)
+        embedding_1_shift = embedding_1 + offset_0_to_1
+        # embedding_1_shift.shape = (b, d, n_1, ..., n_d)
         
-        if embedding is None:
-            embedding = forward_call(x[..., :c_split, :, :])
-        if embedding_shift is None:
-            embedding_shift = forward_call(x[..., c_split:, :, :])
+        loss = torch.nn.functional.mse_loss(embedding_0,
+                                            embedding_1_shift)
 
-        shift_offset = torch.zeros(embedding_shift.shape[:2] + (1, 1))
-        shift_offset[:, :2] = y[:, 1:3, None, None] / 4.
-        shift_offset = shift_offset.to(embedding_shift.device)
-
-        anchor_shift = embedding_shift - shift_offset
-        
-        loss = torch.nn.functional.mse_loss(embedding,
-                                            anchor_shift)
-
-        return loss, embedding, embedding_shift, None, None
+        return loss + reg_loss, embedding_0, embedding_1, None, None
 
 
     def loss_stardist(self, x, y):
@@ -701,6 +690,22 @@ class ContextPredictionTrainer(SSLTrainer):
             # embedding_batch_shift = torch.cat(tuple(torch.cat(tuple(vis(self.squeeze(e_0[c])) for c in range(
             #     e_0.shape[0])), dim=1) for e_0 in embedding_shift.detach().cpu()), dim=-1)
             # embedding_batch = torch.cat((embedding_batch, embedding_batch_shift), dim=-1)
+            elif len(x.shape) == 5:
+                # assuming a patchified image for now
+
+                print(x[0].shape)
+
+                # assumes image is square
+                w = int(math.sqrt(x.shape[1]))
+                tiled_x = x.reshape(x.shape[:1] + (w, w) + x.shape[2:]).detach().cpu()
+
+                tiled_x = tiled_x.permute(0, 3, 1, -2, 2, -1)
+
+                wl = w * x.shape[-2]
+                tiled_x = tiled_x.reshape(tiled_x.shape[:2] + (wl, wl))
+                self.logger.experiment.add_image(f'input', torch.cat(tuple(
+                    torch.cat(tuple(visnorm(tt) for tt in t), dim=-2) for t in tiled_x),dim=-1)[None], self.global_step)
+
 
             if self.loss_name == "directionclass":
                 vis_labels = tuple(_ for _ in context_pred.detach().cpu().argmax(dim=1).numpy())
@@ -764,17 +769,19 @@ class ContextPredictionTrainer(SSLTrainer):
         with torch.no_grad():
             with open(score_filename, "w") as scf:
 
-                embedding_torch, embedding_shift = self.predict(x)
+                embedding_0, embedding_1 = self.predict(x)
                 loss, _, _, _, _ = self.loss_fn()(x, y, 
-                            embedding=embedding_torch,
-                            embedding_shift=embedding_shift)
+                            embedding_0=embedding_0,
+                            embedding_1=embedding_1)
 
-                embedding = embedding_torch.detach().cpu().numpy() 
+                embedding = embedding_0.detach().cpu().numpy() 
 
                 # free memory immediately
                 loss = loss.detach()
-                del embedding_torch
-                del embedding_shift
+                self.val_metrics[f'validation_loss'].append(loss)
+
+                del embedding_0
+                del embedding_1
                 del x
                 del y
 
@@ -794,7 +801,7 @@ class ContextPredictionTrainer(SSLTrainer):
                 for b in range(labels.shape[0]):
                     self.log_img(f'{val_image_counter}_{b}_gt_val', label2color(labels[b].astype(np.int32)), eval_directory=eval_directory)
 
-                tensorboard_logs = {'val_loss': torch.Tensor([0.])}# loss.detach()}
+                tensorboard_logs = {'val_loss': loss}# loss.detach()}
                 tensorboard_logs['iteration'] = self.global_step
 
                 train_stardist = np.stack(

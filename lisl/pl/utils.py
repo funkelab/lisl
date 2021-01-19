@@ -9,6 +9,8 @@ import gunpowder as gp
 import matplotlib
 import random
 from torch.nn import functional as F
+from argparse import ArgumentParser
+import inspect
 
 def offset_slice(offset, reverse=False, extra_dims=0):
     def shift(o):
@@ -43,6 +45,10 @@ def try_remove(filename):
     except OSError:
         pass
 
+def visnorm(x):
+    x = x - x.min()
+    x = x / x.max()
+    return x
 
 def vis(x, normalize=True):
     if isinstance(x, Image.Image):
@@ -62,8 +68,7 @@ def vis(x, normalize=True):
 
     if normalize:
         with torch.no_grad():
-            x = x - x.min()
-            x = x / x.max()
+            visnorm(x)
 
     return x
 
@@ -326,3 +331,21 @@ class Patchify(object):
         x = x.squeeze(0)
 
         return x
+
+
+class BuildFromArgparse(object):
+    @classmethod
+    def from_argparse_args(cls, args, **kwargs):
+
+        if isinstance(args, ArgumentParser):
+            args = cls.parse_argparser(args)
+        params = vars(args)
+
+        # we only want to pass in valid DataModule args, the rest may be user specific
+        valid_kwargs = inspect.signature(cls.__init__).parameters
+        datamodule_kwargs = dict(
+            (name, params[name]) for name in valid_kwargs if name in params
+        )
+        datamodule_kwargs.update(**kwargs)
+
+        return cls(**datamodule_kwargs)

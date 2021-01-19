@@ -328,8 +328,6 @@ class DSBDataset(Dataset):
         assert all(Path(x).name==Path(y).name for x,y in zip(self.X,self.Y))
         self.X = [tiffread(str(e)) for e in self.X]
         self.Y = [tiffread(str(e)) for e in self.Y]
-        print(self.X[0].shape)
-        print(self.Y[0].shape)
 
     def __getitem__(self, index):
         return self.X[index], self.Y[index]
@@ -342,7 +340,7 @@ def augment(x,
             max_alpha=1.2,
             min_beta=-0.2,
             max_beta=+0.2,
-            eta_scale=0.05):
+            eta_scale=0.02):
 
     alpha = random.uniform(min_alpha, max_alpha)
     beta = random.uniform(min_beta, max_beta)
@@ -387,8 +385,8 @@ class ShiftDataset(Dataset):
         global_transforms = Compose(RandomRotate(),
                              RandomTranspose(),
                              RandomFlip(),
-                             ElasticTransform(alpha=2000., sigma=50.),
-                             AdditiveGaussianNoise(sigma=0.05))
+                             ElasticTransform(alpha=2000., sigma=50.),)
+                             # AdditiveGaussianNoise(sigma=0.05))
 
         fine_transforms = ElasticTransform(alpha=2000., sigma=50.)
 
@@ -402,12 +400,9 @@ class ShiftDataset(Dataset):
         if self.train:
             factor = 1. + self.max_scale * np.random.rand()
 
-            print(x.shape, y.shape)
-
             x = rescale(x, factor, order=1)
             y = rescale(y, factor, order=0)
 
-            print(x.shape, y.shape)
             x, y = self.train_transforms(x, y)
 
         # reflection padding to make all shifts viable

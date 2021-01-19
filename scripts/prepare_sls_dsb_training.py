@@ -17,9 +17,9 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for lr in [1e-4]:
-      for context_distance in [4, 8, 16, 32, 64, 128]:
-        for patchsize in [16, 32, 64, 128]:
+    for lr in [1e-4, 1e-5, 1e-3]:
+      for context_distance in [16, 64, 128]:
+        for patchsize in [16, 32, 64]:
             #for loss_name in ["anchor"]:#directionclass"]:#"anchor"
         # for patchdilation in [1, 2, 3, 4]:
 
