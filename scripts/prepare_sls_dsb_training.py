@@ -17,41 +17,32 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for lr in [1e-4, 1e-5, 1e-3]:
-      for context_distance in [16, 64, 128]:
-        for patchsize in [16, 32, 64]:
-            #for loss_name in ["anchor"]:#directionclass"]:#"anchor"
-        # for patchdilation in [1, 2, 3, 4]:
+    for lr in [1e-4, 1e-5]:
+      for patchsize in [32]:
+        for regularization in [0., 0.1, 0.01]:
+          for dist_factor in [1, 2, 3]:
+            for anchor_radius in [5, 10, 20]:
+                hidden_channels = 2
+                stride = 9
+                patchdilation = 1
 
-          # for unet_type, test_out_shape, test_input_name, hidden_channels, bs in zip(["gp", "dunet", "deeplab"], ["120 120", "256 256", "256 256"], ["x", "input_", "x"], [137, 137, 137], [16, 16, 2]):
-            loss_name = "anchor"
-            unet_type = "resnet"
-            test_out_shape = "49, 49"
-            test_input_name = "x"
-            hidden_channels = 137
-            patchoverlap = 5
-            patchdilation = 1
-            hidden_channels = 3
+                args = options.args + f" --initial_lr {lr}"
+                args += f" --hidden_channels {hidden_channels}"
+                args += f" --patch_size {patchsize}"
+                args += f" --patch_overlap {patchsize-stride}"
+                args += f" --max_dist {(patchsize//16)*dist_factor*20}"
+                args += f" --regularization {regularization}"
+                args += f" --anchor_radius {anchor_radius}"
 
-            args = options.args + f" --initial_lr {lr}"
-            args += f" --unet_type {unet_type}"
-            args += f" --hidden_channels {hidden_channels}"
-            args += f" --context_distance {context_distance}"
-            args += f" --patch_size_overlap_dilation {patchsize} {patchoverlap} {patchdilation}"
-            args += f" --patchsize {patchsize}"
-            args += f" --patchoverlap {patchoverlap}"
-            args += f" --patchdilation {patchdilation}"
-            args += f" --loss_name {loss_name}"
-            args += f" --max_direction 0"
+                print(f"setting up {options.base_dir} {experiment_number}")
+                set_up_experiment(options.base_dir,
+                                  options.pybin,
+                                  options.experiment_library,
+                                  options.script,
+                                  options.experiment,
+                                  experiment_number,
+                                  options.cleanup,
+                                  args)
 
-            set_up_experiment(options.base_dir,
-                              options.pybin,
-                              options.experiment_library,
-                              options.script,
-                              options.experiment,
-                              experiment_number,
-                              options.cleanup,
-                              args)
-
-            experiment_number += 1
+                experiment_number += 1
 

@@ -52,87 +52,63 @@ class PatchedResnet50(nn.Module):
             self,
             in_channels,
             out_channels,
-            patchsize=16,
-            overlap=5,
-            dilation=1):
+            pretrained=False):
 
         super().__init__()
 
-        model = models.resnet18(pretrained=True)
+        model = models.resnet18(pretrained=pretrained)
         ptweights = model.conv1.weight.mean(dim=1, keepdim=True).data
         model.conv1 = nn.Conv2d(1, 64, kernel_size=7, padding=3, bias=False)
         model.conv1.weight.data = ptweights
 
-        if out_channels > 1000:
-            raise NotImplementedError("pretrained resnet can not output embeddings with more channels than 1000")
-
         # turn last layer into a 2d convolution
-        fc_conv = nn.Conv2d(2048, out_channels, kernel_size=1, padding=0, bias=True)
-        fc_conv.weight.data = model.fc.weight.data[:out_channels, :, None, None]
-        fc_conv.bias.data = model.fc.bias.data[:out_channels]
+        fc_conv = nn.Conv2d(512, out_channels, kernel_size=1, padding=0, bias=True)
+        fc_conv.weight.data = 10 * fc_conv.weight.data
+        fc_conv.bias.data = 10 * fc_conv.bias.data
+        # fc_conv.weight.data = model.fc.weight.data[:out_channels, :, None, None]
+        # fc_conv.bias.data = model.fc.bias.data[:out_channels]
 
         layers = list(model.children())[:-1] + [fc_conv]
         model = torch.nn.Sequential(*layers)
 
-        self.resnet = model
-        self.patchsize = patchsize
-        self.dilation = dilation
-        self.patch = Patchify(patch_size=patchsize,
-                              overlap_size=overlap,
-                              dilation=dilation)
-        self.pred_patch = Patchify(patch_size=patchsize,
-                              overlap_size=patchsize-1,
-                              dilation=dilation)
+        self.resnet = model.train()
 
-    def forward(self, x):
-
-        if x.shape[-1] != self.patchsize:
-            patches = torch.stack(list(self.patch(x0) for x0 in x))
-        else:
-            patches = x
-
-        assert patches.shape[-2] == patches.shape[-1]
-
-        b, p, c, pw, ph = patches.shape
-        w = h = int(math.sqrt(p))
-        out = self.resnet(patches.view((b*p, c, pw, ph)))
-
-        assert out.shape[-2:] == (1, 1)
-        assert p == h*w
-        
-        out = out.view((b, p, -1))
-        cout = out.shape[-1]
-        out = out.permute(0, 2, 1).view(b, cout, w, h)
+    def forward(self, patches):
+        # patches has to be a Tensor with
+        # patch.shape == (minibatch, channels, patch_width, patch_height)
+        out = self.resnet(patches).mean(dim=(-2, -1)) 
+        # out.shape = (minibatch, outchannels)
         return out
 
-    def predict(self, x, device=None):
-        """ Densly predict the embedding for every pixel in x
-        To save memory, Each scanline is predicted individually and stacked together"""
 
-        lp = (self.patchsize // 2) * self.dilation
-        rp = ((self.patchsize - 1) // 2) * self.dilation
+    # def predict(self, x, device=None):
+    #     """ Densly predict the embedding for every pixel in x
+    #     To save memory, Each scanline is predicted individually and stacked together"""
 
-        # padd the image to get one patch corresponding to each pixel 
-        padded = F.pad(x, (lp, rp, lp, rp), mode='reflect')
+    #     lp = (self.patchsize // 2) * self.dilation
+    #     rp = ((self.patchsize - 1) // 2) * self.dilation
 
-        with torch.no_grad():
+    #     # padd the image to get one patch corresponding to each pixel 
+    #     padded = F.pad(x, (lp, rp, lp, rp), mode='reflect')
 
-            out = []
-            for i in range(x.shape[-2]):
-                patches = torch.stack(list(self.pred_patch(x0) for x0 in padded[:, :, i:i+(self.patchsize * self.dilation)]))
-                b, p, c, pw, ph = patches.shape
-                patches = patches.view(b*p, c, pw, ph)
-                pred_i = self.resnet(patches)
-                pred_i = pred_i.view((b, p, -1))
-                pred_i = pred_i.permute(0, 2, 1).view(b, pred_i.shape[-1], 1, x.shape[-1])
+    #     with torch.no_grad():
 
-                if device is not None:
-                    pred_i = pred_i.to(device)
+    #         out = []
+    #         for i in range(x.shape[-2]):
+    #             patches = torch.stack(list(self.pred_patch(x0) for x0 in padded[:, :, i:i+(self.patchsize * self.dilation)]))
+    #             b, p, c, pw, ph = patches.shape
+    #             patches = patches.view(b*p, c, pw, ph)
+    #             pred_i = self.resnet(patches)
+    #             pred_i = pred_i.view((b, p, -1))
+    #             pred_i = pred_i.permute(0, 2, 1).view(b, pred_i.shape[-1], 1, x.shape[-1])
 
-                out.append(pred_i)
-            out = torch.cat(out, dim=2)
+    #             if device is not None:
+    #                 pred_i = pred_i.to(device)
 
-        return out
+    #             out.append(pred_i)
+    #         out = torch.cat(out, dim=2)
+
+    #     return out
 
 def get_unet_kernels(ndim):
     if ndim == 3:

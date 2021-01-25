@@ -15,12 +15,15 @@ import logging
 import os
 from tifffile import imread as tiffread
 from skimage.transform import rescale
-from lisl.pl.utils import Patchify, random_offset
+from lisl.pl.utils import Patchify, random_offset, Normalize
 import torch
 
 from inferno.io.transform import Compose
 from inferno.io.transform.image import (RandomRotate, ElasticTransform,
-  AdditiveGaussianNoise, RandomTranspose, RandomFlip, FineRandomRotations)
+  AdditiveGaussianNoise, RandomTranspose, RandomFlip, 
+  FineRandomRotations, RandomGammaCorrection, RandomCrop, CenterCrop)
+
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -330,24 +333,11 @@ class DSBDataset(Dataset):
         self.Y = [tiffread(str(e)) for e in self.Y]
 
     def __getitem__(self, index):
-        return self.X[index], self.Y[index]
+        return self.X[index][None], self.Y[index]
 
     def __len__(self):
         return len(self.X)
 
-def augment(x,
-            min_alpha=0.8,
-            max_alpha=1.2,
-            min_beta=-0.2,
-            max_beta=+0.2,
-            eta_scale=0.02):
-
-    alpha = random.uniform(min_alpha, max_alpha)
-    beta = random.uniform(min_beta, max_beta)
-    noise_level = random.uniform(0, eta_scale)
-    eta = noise_level * np.random.randn(*x.shape)
-
-    return alpha * x + beta + eta
 
 class ShiftDataset(Dataset):
 
@@ -358,7 +348,6 @@ class ShiftDataset(Dataset):
                  max_direction,
                  max_scale=2.,
                  train=True,
-                 patch_size_overlap_dilation=None,
                  return_segmentation=True):
 
         self.root_dataset = dataset
@@ -369,14 +358,7 @@ class ShiftDataset(Dataset):
         self.train = train
         self.return_segmentation = return_segmentation
 
-        self.train_transforms, self.fine_transforms = self.get_transforms()
-
-        if patch_size_overlap_dilation is not None:
-          self.patchify = Patchify(patch_size=patch_size_overlap_dilation[0],
-                                   overlap_size=patch_size_overlap_dilation[1],
-                                   dilation=patch_size_overlap_dilation[2])
-        else:
-          self.patchify = None
+        self.train_transforms = self.get_transforms()
 
     def __len__(self):
         return len(self.root_dataset)
@@ -385,12 +367,10 @@ class ShiftDataset(Dataset):
         global_transforms = Compose(RandomRotate(),
                              RandomTranspose(),
                              RandomFlip(),
+                             # RandomGammaCorrection(),
                              ElasticTransform(alpha=2000., sigma=50.),)
-                             # AdditiveGaussianNoise(sigma=0.05))
 
-        fine_transforms = ElasticTransform(alpha=2000., sigma=50.)
-
-        return global_transforms, fine_transforms
+        return global_transforms
 
     def __getitem__(self, index):
 
@@ -398,29 +378,14 @@ class ShiftDataset(Dataset):
         y = y.astype(np.double)
 
         if self.train:
-            factor = 1. + self.max_scale * np.random.rand()
-
-            x = rescale(x, factor, order=1)
-            y = rescale(y, factor, order=0)
-
             x, y = self.train_transforms(x, y)
 
-        # reflection padding to make all shifts viable
-        x = np.pad(x, self.distance, mode='reflect')
-        y = np.pad(y, self.distance, mode='constant', constant_values=-1)
+        # # reflection padding to make all shifts viable
+        # x = np.pad(x, self.distance, mode='reflect')
+        # y = np.pad(y, self.distance, mode='constant', constant_values=-1)
+        xoff, yoff = random_offset(self.distance)
 
-        if self.max_direction > 0:
-          direction = random.randrange(0, self.max_direction)
-          xoff, yoff = offset_from_direction(direction,
-                                             max_direction=self.max_direction,
-                                             distance=self.distance)
-        else:
-          direction = 0
-          xoff, yoff = random_offset(self.distance)
-
-        direction = np.array([direction, xoff, yoff]).astype(np.float32)
-
-
+        direction = np.array([xoff, yoff]).astype(np.float32)
 
         x1 = x[self.distance:self.distance+self.shape[0], 
                self.distance:self.distance+self.shape[1]]
@@ -431,23 +396,157 @@ class ShiftDataset(Dataset):
                self.distance:self.distance+self.shape[1]]
         y2 = y[self.distance+xoff:self.distance+self.shape[0]+xoff, 
                self.distance+yoff:self.distance+self.shape[1]+yoff]
-        
-        if self.train:
-            x1 = self.fine_transforms(x1)
-            x2 = self.fine_transforms(x2)
-            x1 = augment(x1)
-            x2 = augment(x2)
 
         x = np.stack((x1, x2), axis=0).astype(np.float32)
         y = np.stack((y1, y2), axis=0).astype(np.float32)
-
-        if self.patchify is not None:
-          x = self.patchify(torch.from_numpy(x))
 
         if self.return_segmentation:
             return x, direction, y
         else:
             return x, direction
+
+class PatchedDataset(Dataset):
+
+    def __init__(self,
+                 dataset,
+                 output_shape,
+                 patch_size,
+                 patch_overlap,
+                 max_dist,
+                 max_imbalance_dist=0.01,
+                 train=True,
+                 return_segmentation=True):
+        """
+        max_imbalance_dist: int
+            a patch on the edge of the image has an imabalanced
+            set of neighbours. We compute the distance to the averge
+            neigbour (zero for patches in the center)
+            If the average vector is longer than 
+            max_imbalance_dist the connection is removed
+        """
+
+        self.root_dataset = dataset
+        self.train = train
+        self.return_segmentation = return_segmentation
+        self.max_dist = max_dist
+        self.max_imbalance_dist = max_imbalance_dist
+        self.output_shape = tuple(int(_) for _ in output_shape)
+
+        self.patchify = Patchify(patch_size=patch_size,
+                                 overlap_size=patch_overlap,
+                                 dilation=1)
+
+        self._connection_matrix = None
+        self._coords = None
+        self._mask = None
+        self._current_img_shape = None
+        self._train_transforms = None
+        self._test_transforms = None
+
+    @property
+    def coords(self):
+        return self._coords
+
+    def get_connections_and_coords(self, img_shape):
+        if self._current_img_shape != img_shape:
+            self._connection_matrix, self._coords, self._mask = \
+                self.compute_connections_and_coordinates(img_shape)
+        return self._connection_matrix, self._coords, self._mask
+
+    def compute_connections_and_coordinates(self, img_shape):
+
+        self._current_img_shape = img_shape
+        x = np.arange(img_shape[-2], dtype=np.float32)
+        y = np.arange(img_shape[-1], dtype=np.float32)
+
+        coords = np.meshgrid(x, y, copy=True)
+        coords = np.stack(coords, axis=0)
+
+        patch_coords = self.patchify(torch.from_numpy(coords))
+        # patch_coords.shape = (num_patches, 2, patch_width, patch_height)
+        # we need the center coordinate (mean coordinate per patch)
+        patch_coords = patch_coords.mean(dim=(-2, -1))
+        # patch_coords.shape = (num_patches, 2)
+
+        # Compute patch distances
+        squared_distances = ((patch_coords[None] - patch_coords[:, None])**2).sum(axis=-1)
+        # squared_distances.shape = (num_patches, num_patches)
+
+        squared_distances[squared_distances > self.max_dist**2] = 0
+        connection_matrix = (squared_distances != 0)
+
+        # filter non balanced patches
+        avg_diff = (connection_matrix[..., None].numpy() * (patch_coords[None] - patch_coords[:, None]).numpy())
+        # avg_diff.shape = (num_patches, num_patches)
+        averaged_neighbour_dist = ((avg_diff).mean(axis=0)**2).sum(axis=-1)
+        # averaged_neighbour_dist.shape = (num_patches)
+        # remove imbalanced neighbours
+        mask = self.max_imbalance_dist**2 < averaged_neighbour_dist
+
+        # connection_matrix.shape = (num_patches, num_patches)
+        # connection_matrix[i,j] == 1 iff patch i and j are closer than max_dist
+        # but not i == j
+        return connection_matrix, patch_coords, mask
+
+    @property
+    def train_transforms(self):
+        if self._train_transforms is None:
+            self._train_transforms = Compose(RandomRotate(),
+                                     RandomTranspose(),
+                                     RandomFlip(),
+                                     Normalize(),
+                                     # RandomGammaCorrection(),
+                                     ElasticTransform(alpha=2000., sigma=50.),
+                                     RandomCrop(self.output_shape))
+
+        return self._train_transforms
+
+    @property
+    def test_transforms(self):
+        if self._test_transforms is None:
+            self._test_transforms = Compose(Normalize(),
+                                     CenterCrop(self.output_shape))
+        return self._test_transforms
+
+    def augment(self, x,
+            min_alpha=0.8,
+            max_alpha=1.2,
+            min_beta=-0.2,
+            max_beta=+0.2,
+            eta_scale=0.02):
+
+        sample_size = (x.shape[0], ) + (1, ) * (len(x.shape) - 1)
+
+        alpha = np.random.uniform(min_alpha, max_alpha, size=sample_size)
+        beta = np.random.uniform(min_beta, max_beta, size=sample_size)
+        noise_level = np.random.uniform(0, eta_scale)
+        eta = noise_level * np.random.randn(*x.shape)
+
+        return (alpha * x + beta + eta).astype(np.float32)
+
+    def __len__(self):
+        return len(self.root_dataset)
+
+    def __getitem__(self, index):
+
+        x, y = self.root_dataset[index]
+        y = y.astype(np.double)
+
+        if self.train:
+            x, y = self.train_transforms(x, y)
+        else:
+            x, y = self.test_transforms(x, y)         
+
+        conn_mat, abs_coords, mask = self.get_connections_and_coords(x.shape)
+        patches = self.patchify(torch.from_numpy(x))
+
+        if self.train:
+            patches = self.augment(patches.numpy())
+
+        if self.return_segmentation:
+            return x, patches, abs_coords, conn_mat, mask, y
+        else:
+            return x, patches, abs_coords, conn_mat, mask
 
 if __name__ == '__main__':
     # GunpowderDataset("/home/swolf/local/data/17-04-14/preprocessing/array.n5")

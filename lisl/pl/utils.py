@@ -11,6 +11,7 @@ import random
 from torch.nn import functional as F
 from argparse import ArgumentParser
 import inspect
+from inferno.io.transform.base import Transform
 
 def offset_slice(offset, reverse=False, extra_dims=0):
     def shift(o):
@@ -349,3 +350,56 @@ class BuildFromArgparse(object):
         datamodule_kwargs.update(**kwargs)
 
         return cls(**datamodule_kwargs)
+
+
+class Normalize(Transform):
+    """Percentile-based image normalization 
+       (adopted from https://github.com/CSBDeep/CSBDeep/blob/master/csbdeep/utils/utils.py)"""
+    def __init__(self, pmin=3, pmax=99.8, clip=False,
+                       eps=1e-20, dtype=np.float32, 
+                       axis=None, **super_kwargs):
+        """
+        Parameters
+        ----------
+        pmin: float
+            minimum percentile value. The pmin percentile value of the input tensor
+            is mapped to 0.
+        pmax: float
+            maximum percentile value. The pmax percentile value of the input tensor
+            is mapped to 1.
+        clip: bool
+            Clip all values outside of the percentile range to (0, 1)
+        axis: int, tuple or None
+            spatial dimensions considerered for the normalization
+        super_kwargs : dict
+            Kwargs to the superclass `inferno.io.transform.base.Transform`.
+        """
+        super(Normalize, self).__init__(**super_kwargs)
+        self.pmin = pmin
+        self.pmax = pmax
+        self.clip = clip
+        self.axis = axis
+        self.dtype = dtype
+        self.eps = eps
+
+    def tensor_function(self, tensor):
+    
+        mi = np.percentile(tensor, self.pmin, axis=self.axis, keepdims=True)
+        ma = np.percentile(tensor, self.pmax, axis=self.axis, keepdims=True)
+
+        if self.dtype is not None:
+            tensor   = tensor.astype(self.dtype, copy=False)
+            mi  = self.dtype(mi) if np.isscalar(mi) else mi.astype(self.dtype, copy=False)
+            ma  = self.dtype(ma) if np.isscalar(ma) else ma.astype(self.dtype, copy=False)
+            self.eps = self.dtype(self.eps)
+
+        try:
+            import numexpr
+            x = numexpr.evaluate("(tensor - mi) / ( ma - mi + self.eps )")
+        except ImportError:
+            x =                   (tensor - mi) / ( ma - mi + self.eps )
+
+        if self.clip:
+            x = np.clip(x,0,1)
+
+        return x
