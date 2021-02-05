@@ -11,6 +11,7 @@ if __name__ == '__main__':
     p.add('-r', '--script', required=True, help='script to run')
     p.add('-p', '--pybin', default='python', help='path to python binary')
     p.add('-l', '--experiment_library', help='path to experiment library')
+    p.add('--datamodule', default='DSBDataModule')
     p.add('-c', '--cleanup', required=False, action='store_true', help='clean up - remove specified train setup')
     p.add('--args', required=False, default="", help='arguments passed to the running script')
 
@@ -20,8 +21,8 @@ if __name__ == '__main__':
 
     for lr in [1e-5]:
       for patchsize in [16]:
-        for regularization in [0.1]:
-          for img_scale in np.arange(1., 4., 0.1):
+        for regularization in [10., 1., 0.1, 0.01, 0.00001]:
+          for img_scale in [1.]:
 
             hidden_channels = 2
             stride = 9
@@ -33,6 +34,9 @@ if __name__ == '__main__':
             args = options.args + f" --initial_lr {lr}"
             args += f" --hidden_channels {hidden_channels}"
             args += f" --patch_size {patchsize}"
+            args += f" --dataset {options.datamodule}"
+            args += f" --in_channels 3"
+            args += f" --gpus 8"
             args += f" --patch_overlap {patchsize-stride}"
             args += f" --max_dist {dist_factor}"
             args += f" --regularization {regularization}"
@@ -47,7 +51,9 @@ if __name__ == '__main__':
                               options.experiment,
                               experiment_number,
                               options.cleanup,
-                              args)
+                              args,
+                              ngpu=8,
+                              ncpu=39)
 
             experiment_number += 1
 

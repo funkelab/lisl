@@ -3,6 +3,7 @@ import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
 from lisl.pl.dataset import PatchedDataset, SparseChannelDataset, RandomShiftDataset, DSBDataset
+from torchvision import transforms, datasets
 
 class SSLDataModule(pl.LightningDataModule):
 
@@ -139,29 +140,28 @@ class MosaicDataModule(pl.LightningDataModule):
         return parser
 
 
-class DSBDataModule(pl.LightningDataModule):
+class AnchorDataModule(pl.LightningDataModule):
 
     def __init__(self, batch_size, dspath,
                  shape=(256, 256), loader_workers=10, max_dist=64,
-                 patch_size=16, patch_overlap=5):
+                 image_scale=1., patch_size=16, patch_overlap=5):
 
         super().__init__()
         self.batch_size = batch_size
         self.dspath = dspath
-        self.shape = shape
+        self.shape = tuple(int(_) for _ in shape)
         self.loader_workers = loader_workers
         self.patch_size = patch_size
         self.patch_overlap = patch_overlap
         self.max_dist = max_dist
+        self.scale = image_scale
+
+    def setup_datasets(self):
+      raise NotImplementedError()
 
     def setup(self, stage=None):
-
-        full_ds = DSBDataset(self.dspath)
-        train_set_size = int(len(full_ds) * 0.9)
-        val_set_size = len(full_ds) - train_set_size
-        dsb_train, dsb_val = torch.utils.data.random_split(
-                                full_ds, 
-                                [train_set_size, val_set_size])
+      
+        dsb_train, dsb_val = self.setup_datasets()
 
         self.ds_train = PatchedDataset(
                                 dsb_train,
@@ -169,16 +169,18 @@ class DSBDataModule(pl.LightningDataModule):
                                 self.patch_size,
                                 self.patch_overlap,
                                 self.max_dist,
-                                train=True,
+                                scale=self.scale,
+                                augment=True,
                                 return_segmentation=False)
 
         self.ds_val = PatchedDataset(
-                                dsb_train,
+                                dsb_val,
                                 self.shape,
                                 self.patch_size,
                                 self.patch_overlap,
                                 self.max_dist,
-                                train=False,
+                                scale=self.scale,
+                                augment=False,
                                 return_segmentation=True)
 
     def train_dataloader(self):
@@ -186,14 +188,14 @@ class DSBDataModule(pl.LightningDataModule):
                           shuffle=True,
                           batch_size=self.batch_size,
                           num_workers=self.loader_workers,
-                          drop_last=True)
+                          drop_last=False)
 
     def val_dataloader(self):
         return DataLoader(self.ds_val,
-                          batch_size=1,
+                          batch_size=self.batch_size,
                           shuffle=False,
                           num_workers=self.loader_workers,
-                          drop_last=True)
+                          drop_last=False)
 
     def test_dataloader(self):
         return None
@@ -212,5 +214,81 @@ class DSBDataModule(pl.LightningDataModule):
         parser.add_argument('--patch_size', type=int, default=16)
         parser.add_argument('--patch_overlap', type=int, default=5)
         parser.add_argument('--max_dist', type=int, default=128)
+        parser.add_argument('--image_scale', type=float, default=1.)
 
         return parser
+        
+
+class DSBDataModule(AnchorDataModule):
+
+    def setup_datasets(self):
+
+      full_ds = DSBDataset(self.dspath)
+      train_set_size = int(len(full_ds) * 0.90)
+      val_set_size = len(full_ds) - train_set_size
+      torch.manual_seed(100)
+      dsb_train, dsb_val = torch.utils.data.random_split(
+                              full_ds,
+                              [train_set_size, val_set_size])
+
+      # add different augmentations to train and val datasets
+      dsb_train = DSBTrainAugmentations(dsb_train)
+      dsb_val = DSBTestAugmentations(dsb_val)
+
+      return dsb_train, dsb_val
+
+class OpenImagesDataModule(AnchorDataModule):
+
+    def setup_datasets(self):
+
+      normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+
+      full_ds = datasets.ImageFolder(
+          self.dspath,
+          transforms.Compose([
+            transforms.RandomResizedCrop(self.shape),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize,
+          ]))
+
+      train_set_size = int(len(full_ds) * 0.90)
+      val_set_size = len(full_ds) - train_set_size
+      torch.manual_seed(100)
+      dsb_train, dsb_val = torch.utils.data.random_split(
+                                full_ds,
+                                [train_set_size, val_set_size])
+        
+      return dsb_train, dsb_val
+
+class CelebADataModule(AnchorDataModule):
+
+    def setup_datasets(self):
+
+      dsb_train = datasets.CelebA(self.dspath,
+                                  download=False,
+                                  split='train',
+                                  transform=transforms.Compose([
+                                    transforms.Resize(self.shape),
+                                    transforms.CenterCrop(self.shape),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                                                         std=[0.5, 0.5, 0.5])
+                              ]))
+
+      dsb_val = datasets.CelebA(self.dspath,
+                                  download=False,
+                                  split='valid',
+                                  transform=transforms.Compose([
+                                    transforms.Resize(self.shape),
+                                    transforms.CenterCrop(self.shape),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                                                         std=[0.5, 0.5, 0.5])
+                              ]))
+
+      return dsb_train, dsb_val
+
+
+

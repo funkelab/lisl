@@ -56,15 +56,17 @@ class PatchedResnet50(nn.Module):
 
         super().__init__()
 
-        model = models.resnet18(pretrained=pretrained)
-        ptweights = model.conv1.weight.mean(dim=1, keepdim=True).data
-        model.conv1 = nn.Conv2d(1, 64, kernel_size=7, padding=3, bias=False)
-        model.conv1.weight.data = ptweights
+        model = models.resnet50(pretrained=pretrained)
+        if in_channels != 1:
+            ptweights = model.conv1.weight.mean(dim=1, keepdim=True).data
+            model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, padding=3, bias=False)
+            if in_channels == 1:
+                model.conv1.weight.data = ptweights
 
         # turn last layer into a 2d convolution
-        fc_conv = nn.Conv2d(512, out_channels, kernel_size=1, padding=0, bias=True)
-        fc_conv.weight.data = 10 * fc_conv.weight.data
-        fc_conv.bias.data = 10 * fc_conv.bias.data
+        fc_conv = nn.Conv2d(2048, out_channels, kernel_size=1, padding=0, bias=True)
+        fc_conv.weight.data = 1. * fc_conv.weight.data
+        fc_conv.bias.data = 1. * fc_conv.bias.data
         # fc_conv.weight.data = model.fc.weight.data[:out_channels, :, None, None]
         # fc_conv.bias.data = model.fc.bias.data[:out_channels]
 

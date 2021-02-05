@@ -14,16 +14,13 @@ import time
 import logging
 import os
 from tifffile import imread as tiffread
-from skimage.transform import rescale
-from lisl.pl.utils import Patchify, random_offset, Normalize
+from lisl.pl.utils import Patchify, random_offset, Normalize, Scale
 import torch
 
 from inferno.io.transform import Compose
 from inferno.io.transform.image import (RandomRotate, ElasticTransform,
   AdditiveGaussianNoise, RandomTranspose, RandomFlip, 
   FineRandomRotations, RandomGammaCorrection, RandomCrop, CenterCrop)
-
-
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -346,14 +343,12 @@ class ShiftDataset(Dataset):
                  shape,
                  distance,
                  max_direction,
-                 max_scale=2.,
                  train=True,
                  return_segmentation=True):
 
         self.root_dataset = dataset
         self.distance = distance
         self.max_direction = max_direction
-        self.max_scale = max_scale
         self.shape = tuple(int(_) for _ in shape)
         self.train = train
         self.return_segmentation = return_segmentation
@@ -405,6 +400,64 @@ class ShiftDataset(Dataset):
         else:
             return x, direction
 
+
+class DSBTrainAugmentations(Dataset):
+
+    def __init__(self,
+                 dataset):
+      self.root_dataset = dataset
+      self._train_transforms = None
+
+    @property
+    def train_transforms(self):
+        if self._train_transforms is None:
+            self._train_transforms = Compose(RandomRotate(),
+                                     RandomTranspose(),
+                                     RandomFlip(),
+                                     Normalize(apply_to=[0]),
+                                     Scale(self.scale),
+                                     # RandomGammaCorrection(),
+                                     ElasticTransform(alpha=2000., sigma=50.),
+                                     RandomCrop(self.output_shape))
+
+        return self._train_transforms
+
+    def __len__(self):
+        return len(self.root_dataset)
+
+    def __getitem__(self, index):
+
+      x, y = self.root_dataset[index]
+      y = y.astype(np.double)
+      x, y = self.train_transforms(x, y)
+      return x, y
+
+
+class DSBTestAugmentations(Dataset):
+
+    def __init__(self,
+                 dataset):
+        self.root_dataset = dataset
+        self._test_transforms = None
+
+    @property
+    def test_transforms(self):
+        if self._test_transforms is None:
+            self._test_transforms = Compose(Normalize(apply_to=[0]),
+                                            Scale(self.scale),
+                                            CenterCrop(self.output_shape))
+        return self._test_transforms
+
+    def __len__(self):
+        return len(self.root_dataset)
+
+    def __getitem__(self, index):
+
+        x, y = self.root_dataset[index]
+        y = y.astype(np.double)
+        x, y = self.test_transforms(x, y)
+        return x, y
+
 class PatchedDataset(Dataset):
 
     def __init__(self,
@@ -413,8 +466,9 @@ class PatchedDataset(Dataset):
                  patch_size,
                  patch_overlap,
                  max_dist,
+                 scale=1.,
                  max_imbalance_dist=0.01,
-                 train=True,
+                 augment=True,
                  return_segmentation=True):
         """
         max_imbalance_dist: int
@@ -426,11 +480,12 @@ class PatchedDataset(Dataset):
         """
 
         self.root_dataset = dataset
-        self.train = train
+        self.augment = augment
         self.return_segmentation = return_segmentation
         self.max_dist = max_dist
         self.max_imbalance_dist = max_imbalance_dist
         self.output_shape = tuple(int(_) for _ in output_shape)
+        self.scale = scale
 
         self.patchify = Patchify(patch_size=patch_size,
                                  overlap_size=patch_overlap,
@@ -440,8 +495,6 @@ class PatchedDataset(Dataset):
         self._coords = None
         self._mask = None
         self._current_img_shape = None
-        self._train_transforms = None
-        self._test_transforms = None
 
     @property
     def coords(self):
@@ -488,27 +541,23 @@ class PatchedDataset(Dataset):
         # but not i == j
         return connection_matrix, patch_coords, mask
 
-    @property
-    def train_transforms(self):
-        if self._train_transforms is None:
-            self._train_transforms = Compose(RandomRotate(),
-                                     RandomTranspose(),
-                                     RandomFlip(),
-                                     Normalize(),
-                                     # RandomGammaCorrection(),
-                                     ElasticTransform(alpha=2000., sigma=50.),
-                                     RandomCrop(self.output_shape))
+    def unpack(self, sample):
+      if isinstance(sample, tuple):
+        if len(sample) == 2:
+          x, y = sample
+        else:
+          x = sample[0]
+          y = 0.
+      else:
+          x = sample
+          y = 0.
 
-        return self._train_transforms
+      if isinstance(x, np.ndarray):
+        x = torch.from_numpy(x)
 
-    @property
-    def test_transforms(self):
-        if self._test_transforms is None:
-            self._test_transforms = Compose(Normalize(),
-                                     CenterCrop(self.output_shape))
-        return self._test_transforms
+      return x, y
 
-    def augment(self, x,
+    def apply_patch_augmentation(self, x,
             min_alpha=0.8,
             max_alpha=1.2,
             min_beta=-0.2,
@@ -529,24 +578,19 @@ class PatchedDataset(Dataset):
 
     def __getitem__(self, index):
 
-        x, y = self.root_dataset[index]
-        y = y.astype(np.double)
-
-        if self.train:
-            x, y = self.train_transforms(x, y)
-        else:
-            x, y = self.test_transforms(x, y)         
+        x,y = self.unpack(self.root_dataset[index])
 
         conn_mat, abs_coords, mask = self.get_connections_and_coords(x.shape)
-        patches = self.patchify(torch.from_numpy(x))
+        patches = self.patchify(x)
 
-        if self.train:
-            patches = self.augment(patches.numpy())
+        if self.augment:
+            patches = self.apply_patch_augmentation(patches.numpy())
 
         if self.return_segmentation:
             return x, patches, abs_coords, conn_mat, mask, y
         else:
             return x, patches, abs_coords, conn_mat, mask
+
 
 if __name__ == '__main__':
     # GunpowderDataset("/home/swolf/local/data/17-04-14/preprocessing/array.n5")

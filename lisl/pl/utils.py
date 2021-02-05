@@ -12,6 +12,8 @@ from torch.nn import functional as F
 from argparse import ArgumentParser
 import inspect
 from inferno.io.transform.base import Transform
+from skimage.transform import rescale
+from functools import partial
 
 def offset_slice(offset, reverse=False, extra_dims=0):
     def shift(o):
@@ -38,7 +40,7 @@ def label2color(label):
     shuffle_labels = np.concatenate(
         ([0], np.random.permutation(label.max()) + 1))
     label = shuffle_labels[label]
-    return cmap(label / label.max()).transpose(2, 0, 1)
+    return cmap(label / (label.max()+1)).transpose(2, 0, 1)
 
 def try_remove(filename):
     try:
@@ -403,3 +405,42 @@ class Normalize(Transform):
             x = np.clip(x,0,1)
 
         return x
+
+def pre_channel(img, fun):
+    if len(img.shape) == 3:
+        return np.stack(tuple(fun(_) for _ in img), axis=0)
+    else:
+        return fun(img)
+
+class Scale(Transform):
+    """ Rescale patch of by constant factor"""
+    def __init__(self, scale, **super_kwargs):
+        super().__init__(**super_kwargs)
+        self.scale = scale
+
+    def batch_function(self, inp):
+
+        image, segmentation = inp
+
+        if self.scale != 1.:
+            image = pre_channel(
+                image,
+                partial(rescale,
+                    scale=self.scale,
+                    order=3,
+                    anti_aliasing=True))
+
+            segmentation = pre_channel(
+                segmentation,
+                partial(rescale,
+                    scale=self.scale,
+                    order=0))
+
+        return image.astype(np.float32), segmentation.astype(np.float32)
+
+def import_by_string(name):
+    components = name.split('.')
+    mod = __import__(components[0])
+    for comp in components[1:]:
+        mod = getattr(mod, comp)
+    return mod

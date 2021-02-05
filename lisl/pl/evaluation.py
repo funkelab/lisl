@@ -14,9 +14,13 @@ from skimage import measure
 from scipy import ndimage
 from skimage.morphology import watershed
 from skimage.io import imsave
-from lisl.pl.utils import adapted_rand, vis, label2color, try_remove
+from lisl.pl.utils import adapted_rand, vis, label2color, try_remove, BuildFromArgparse
 from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
+from lisl.pl.utils import Patchify
+from torch.nn import functional as F
+from sklearn.cluster import MeanShift
+from lisl.pl.visualizations import vis_anchor_embedding
 
 from PIL import Image
 import matplotlib
@@ -28,7 +32,7 @@ def compute_3class_segmentation(inner, background):
     return watershed(-distance, seeds, mask=1 - background)
 
 
-class SupervisedLinearSegmentationValidation(Callback):
+class SupervisedLinearSegmentationValidation(Callback, BuildFromArgparse):
 
     def __init__(self, test_ds_filename, test_ds_name_raw, test_ds_name_seg, test_out_shape, test_input_name):
         self.test_filename = test_ds_filename
@@ -52,28 +56,6 @@ class SupervisedLinearSegmentationValidation(Callback):
 
         return parser
 
-    @classmethod
-    def from_argparse_args(cls, args, **kwargs):
-        """
-        Adapted from the pytorch lightning trainer. Create an instance from CLI arguments. 
-        Args:
-            args: The parser or namespace to take arguments from. Only known arguments will be
-                parsed and passed to the Callback.
-            **kwargs: Additional keyword arguments that may override ones in the parser or namespace.
-                These must be valid arguments.
-        """
-        if isinstance(args, argparse.ArgumentParser):
-            args = cls.parse_argparser(args)
-        params = vars(args)
-
-        valid_kwargs = inspect.signature(cls.__init__).parameters
-        callback_kwargs = dict((name, params[name])
-                               for name in valid_kwargs if name in params)
-        callback_kwargs.update(**kwargs)
-        print(callback_kwargs)
-
-        return cls(**callback_kwargs)
-
     def log_img_and_seg(self,
                         img,
                         label,
@@ -93,7 +75,7 @@ class SupervisedLinearSegmentationValidation(Callback):
                     img = img[0]
                 if img.shape[0] in [3, 4]:
                     img = img.transpose(1, 2, 0)
-                imsave(os.path.join(eval_directory, name+".png"),
+                imsave(os.path.join(eval_directory, name+".jpg"),
                        img,
                        check_contrast=False)
             except:
@@ -255,3 +237,117 @@ class SupervisedLinearSegmentationValidation(Callback):
                                             f"seg_n={n_samples}": seg_score},
                                      predicted_labels=predicted_seg[-1],
                                      embeddings=embeddings)
+
+class AnchorSegmentationValidation(Callback):
+
+    def __init__(self, run_ms_segmentation=True, edim=2, device='cpu'):
+        self.run_ms_segmentation = run_ms_segmentation
+        self.device = device
+        self.edim = edim
+
+        super().__init__()
+
+    def on_validation_epoch_start(self, trainer, pl_module):
+        """Called when the validation loop begins."""
+        self.seg_scores = []
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        """Called when the validation loop ends."""
+        print("seg_score_best_bandwidth", np.mean(self.seg_scores))
+        pl_module.log("seg_score_best_bandwidth", np.mean(self.seg_scores))
+
+
+    def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
+
+        with torch.no_grad():
+            x, patches, abs_coords, patch_matches, mask, y = batch
+
+            patch_size = trainer.datamodule.patch_size
+            lp = (patch_size // 2)
+            rp = ((patch_size - 1) // 2)
+
+            # padd the image to get one patch corresponding to each pixel 
+            padded = F.pad(x, (lp, rp, lp, rp), mode='reflect')
+
+            pf = Patchify(patch_size=patch_size,
+                          overlap_size=patch_size-1,
+                          dilation=1)
+
+            embedding_relative = torch.empty((x.shape[0], self.edim) + x.shape[-2:])
+            embedding = torch.empty((x.shape[0], self.edim) + x.shape[-2:])
+            for i in range(x.shape[-2]):
+                patches = torch.stack(list(pf(x0) for x0 in padded[:, :, i:i+(patch_size)]))
+                # patches.shape = (batch_size, num_patches, 2, patch_width, patch_height)
+                b, p, c, pw, ph = patches.shape
+
+                patches = patches.cuda()
+                pred_i = pl_module.forward_patches(patches)
+                pred_i = pred_i.to(embedding.device)
+
+                embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, self.edim, x.shape[-1])
+                embedding[:, :, i] = pred_i.permute(0, 2, 1).view(b, self.edim, x.shape[-1])
+                embedding[:, 0, i] += torch.arange(x.shape[-1])[None]
+                embedding[:, 1, i] += i
+
+        # save model with evaluation number
+        eval_directory = os.path.abspath(os.path.join(pl_module.logger.log_dir,
+                                                      os.pardir,
+                                                      os.pardir,
+                                                      "evaluation",
+                                                      f"{pl_module.global_step:08d}"))
+
+        os.makedirs(eval_directory, exist_ok=True)
+        def n(a):
+            out = a - a.min()
+            out /= out.max() + 1e-8 
+            return out
+
+        for b, e in enumerate(embedding.cpu().numpy()):
+            imsave(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg", np.stack((n(e[0]), n(x[b, 0].cpu().numpy()), n(e[1])), axis=-1))
+
+        for b, e in enumerate(embedding_relative.cpu().numpy()):
+            imsave(f"{eval_directory}/rel_embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg", np.stack((n(e[0]), n(x[b, 0].cpu().numpy()), n(e[1])), axis=-1))
+            cx = np.arange(e.shape[-2], dtype=np.float32)
+            cy = np.arange(e.shape[-1], dtype=np.float32)
+            coords = np.meshgrid(cx, cy, copy=True)
+            coords = np.stack(coords, axis=-1)
+            
+            e_transposed = np.transpose(e, (1,2,0))
+            # downsample_factor
+            dsf = 8
+
+
+            patch_coords = coords[dsf//2::dsf, dsf//2::dsf].reshape(-1, self.edim)
+            patch_embedding = e_transposed[dsf//2::dsf, dsf//2::dsf].reshape(-1, self.edim)
+
+            vis_anchor_embedding(patch_embedding,
+                                 patch_coords,
+                                 n(x[b].cpu().numpy()),
+                                 grad=None,
+                                 output_file=f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg")
+
+        if self.run_ms_segmentation:
+            b, c, w, h = embedding.shape
+            resh_emb = embedding.permute(0, 2, 3, 1).view(b, w*h, c)
+
+            bandwidths = [1, 2, 4] + list(np.arange(5., 30., 10.))
+            seg_score_table = np.zeros((len(bandwidths), b))
+            for i, bandwidth in enumerate(bandwidths):
+                for j in range(b):
+                    X = resh_emb[j].contiguous().numpy()
+                    ms = MeanShift(bandwidth=bandwidth)
+                    ms_seg = ms.fit(X[np.random.rand(len(X)) < 0.02])
+                    ms_seg = ms.predict(X)
+                    ms_seg = ms_seg.reshape(w, h)
+                    colseg = label2color(ms_seg).transpose(1, 2, 0)
+
+                    seg_score_table[i, j] = seg_metric(ms_seg, y[0].numpy())
+
+                    if i == 0 or seg_score_table[i, j] >= seg_score_table[:i, j].max():
+                        img = np.repeat(x[j, 0, ..., None].cpu().numpy(), 3, axis=-1)
+                        blend = (colseg[..., :3] / 2)  + img
+                        imsave(f'{eval_directory}/msseg_{batch_idx}_{pl_module.local_rank}_{j}.jpg', blend)
+
+            print("seg_score", seg_score_table)
+
+            self.seg_scores.append(seg_score_table.max(axis=0).mean())
