@@ -6,7 +6,7 @@ import gunpowder as gp
 import daisy
 import numpy as np
 import random
-from skimage.io import imsave
+from skimage.io import imsave, imread
 import math
 import pytorch_lightning as pl
 import argparse
@@ -14,7 +14,7 @@ import time
 import logging
 import os
 from tifffile import imread as tiffread
-from lisl.pl.utils import Patchify, random_offset, Normalize, Scale
+from lisl.pl.utils import Patchify, random_offset, QuantileNormalize, Scale
 import torch
 
 from inferno.io.transform import Compose
@@ -335,6 +335,50 @@ class DSBDataset(Dataset):
     def __len__(self):
         return len(self.X)
 
+class UsiigaciDataset(Dataset):
+
+    def __init__(self,
+                 pathname,
+                 split="train",
+                 **kwargs):
+
+        path = Path(pathname)
+
+        # read dataset to memory
+        self.X = sorted(path.glob(f'{split}/images/*.tif'))
+        self.Y = sorted(path.glob(f'{split}/masks/*.png'))
+        assert all(Path(x).name[-6:-4]==Path(y).name[-6:-4] for x,y in zip(self.X,self.Y))
+        self.X = [tiffread(str(e)) for e in self.X]
+        self.Y = [np.array(imread(str(e))) for e in self.Y]
+
+    def __getitem__(self, index):
+        return self.X[index][None], self.Y[index]
+
+    def __len__(self):
+        return len(self.X)
+
+
+class Bbbc010Dataset(Dataset):
+
+    def __init__(self,
+                 pathname,
+                 split="train",
+                 **kwargs):
+
+        path = Path(pathname)
+
+        # read dataset to memory
+        self.X = sorted(path.glob(f'{split}/images/*.tif'))
+        self.Y = sorted(path.glob(f'{split}/masks/*.png'))
+        assert all(Path(x).name[-7:-4]==Path(y).name[-7:-4] for x,y in zip(self.X,self.Y))
+        self.X = [tiffread(str(e)) for e in self.X]
+        self.Y = [np.array(imread(str(e))) for e in self.Y]
+
+    def __getitem__(self, index):
+        return self.X[index][None], self.Y[index]
+
+    def __len__(self):
+        return len(self.X)
 
 class ShiftDataset(Dataset):
 
@@ -404,8 +448,12 @@ class ShiftDataset(Dataset):
 class DSBTrainAugmentations(Dataset):
 
     def __init__(self,
-                 dataset):
+                 dataset,
+                 scale=1.,
+                 output_shape=(256, 256)):
       self.root_dataset = dataset
+      self.scale = scale
+      self.output_shape = output_shape
       self._train_transforms = None
 
     @property
@@ -414,7 +462,7 @@ class DSBTrainAugmentations(Dataset):
             self._train_transforms = Compose(RandomRotate(),
                                      RandomTranspose(),
                                      RandomFlip(),
-                                     Normalize(apply_to=[0]),
+                                     QuantileNormalize(apply_to=[0]),
                                      Scale(self.scale),
                                      # RandomGammaCorrection(),
                                      ElasticTransform(alpha=2000., sigma=50.),
@@ -429,6 +477,7 @@ class DSBTrainAugmentations(Dataset):
 
       x, y = self.root_dataset[index]
       y = y.astype(np.double)
+
       x, y = self.train_transforms(x, y)
       return x, y
 
@@ -436,16 +485,19 @@ class DSBTrainAugmentations(Dataset):
 class DSBTestAugmentations(Dataset):
 
     def __init__(self,
-                 dataset):
+                 dataset,
+                 scale=1.,
+                 output_shape=(256, 256)):
         self.root_dataset = dataset
+        self.scale = scale
+        self.output_shape = output_shape
         self._test_transforms = None
 
     @property
     def test_transforms(self):
         if self._test_transforms is None:
-            self._test_transforms = Compose(Normalize(apply_to=[0]),
-                                            Scale(self.scale),
-                                            CenterCrop(self.output_shape))
+            self._test_transforms = Compose(QuantileNormalize(apply_to=[0]),
+                                            Scale(self.scale))
         return self._test_transforms
 
     def __len__(self):
@@ -605,18 +657,26 @@ if __name__ == '__main__':
     filename = Path.home()/"tmp"
     distance = 10
 
-    gs = ShiftDataset(DSBDataset(filename),
-                      (256, 256),
-                      distance,
-                      8,
-                      train=True,
-                      return_segmentation=False)
+    folder = "/home/swolf/mnt/janelia/nrs/funke/wolfs2/data/BBBC010/images"
+
+    gs = Bbbc010Dataset(
+        folder,
+        "val"
+        # transforms.ToTensor()
+        )
+    # gs = ShiftDataset(DSBDataset(filename),
+    #                   (256, 256),
+    #                   distance,
+    #                   8,
+    #                   train=True,
+    #                   return_segmentation=False)
 
     for i in range(10):
 
-        inp, direction = gs[i]
+        inp = gs[i][0]
 
-        print("inp", inp.shape)
+
+        print("inp", np.array(inp))
         # print("target", target.shape)
 
         for c in range(inp.shape[0]):

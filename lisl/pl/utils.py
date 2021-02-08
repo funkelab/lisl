@@ -354,10 +354,32 @@ class BuildFromArgparse(object):
         return cls(**datamodule_kwargs)
 
 
-class Normalize(Transform):
+def quantil_normalize(tensor, pmin=3, pmax=99.8, clip=False,
+                      eps=1e-20, dtype=np.float32, axis=None):
+        mi = np.percentile(tensor, pmin, axis=axis, keepdims=True)
+        ma = np.percentile(tensor, pmax, axis=axis, keepdims=True)
+
+        if dtype is not None:
+            tensor   = tensor.astype(dtype, copy=False)
+            mi  = dtype(mi) if np.isscalar(mi) else mi.astype(dtype, copy=False)
+            ma  = dtype(ma) if np.isscalar(ma) else ma.astype(dtype, copy=False)
+            eps = dtype(eps)
+
+        try:
+            import numexpr
+            x = numexpr.evaluate("(tensor - mi) / ( ma - mi + eps )")
+        except ImportError:
+            x =                   (tensor - mi) / ( ma - mi + eps )
+
+        if clip:
+            x = np.clip(x, 0, 1)
+
+        return x
+
+class QuantileNormalize(Transform):
     """Percentile-based image normalization 
        (adopted from https://github.com/CSBDeep/CSBDeep/blob/master/csbdeep/utils/utils.py)"""
-    def __init__(self, pmin=3, pmax=99.8, clip=False,
+    def __init__(self, pmin=0.6, pmax=99.8, clip=False,
                        eps=1e-20, dtype=np.float32, 
                        axis=None, **super_kwargs):
         """
@@ -376,7 +398,7 @@ class Normalize(Transform):
         super_kwargs : dict
             Kwargs to the superclass `inferno.io.transform.base.Transform`.
         """
-        super(Normalize, self).__init__(**super_kwargs)
+        super().__init__(**super_kwargs)
         self.pmin = pmin
         self.pmax = pmax
         self.clip = clip
@@ -385,26 +407,30 @@ class Normalize(Transform):
         self.eps = eps
 
     def tensor_function(self, tensor):
-    
-        mi = np.percentile(tensor, self.pmin, axis=self.axis, keepdims=True)
-        ma = np.percentile(tensor, self.pmax, axis=self.axis, keepdims=True)
+        return quantil_normalize(tensor, pmin=self.pmin, pmax=self.pmax, clip=self.clip,
+                                 axis=self.axis, dtype=self.dtype, eps=self.eps)
 
-        if self.dtype is not None:
-            tensor   = tensor.astype(self.dtype, copy=False)
-            mi  = self.dtype(mi) if np.isscalar(mi) else mi.astype(self.dtype, copy=False)
-            ma  = self.dtype(ma) if np.isscalar(ma) else ma.astype(self.dtype, copy=False)
-            self.eps = self.dtype(self.eps)
+class QuantileNormalizeTorchTransform(object):
+    """Crop randomly the image in a sample.
 
-        try:
-            import numexpr
-            x = numexpr.evaluate("(tensor - mi) / ( ma - mi + self.eps )")
-        except ImportError:
-            x =                   (tensor - mi) / ( ma - mi + self.eps )
+    Args:
+        output_size (tuple or int): Desired output size. If int, square crop
+            is made.
+    """
 
-        if self.clip:
-            x = np.clip(x,0,1)
+    def __init__(self, pmin=3, pmax=99.8, clip=False,
+                       eps=1e-20, axis=None):
+        self.pmin = pmin
+        self.pmax = pmax
+        self.clip = clip
+        self.axis = axis
+        self.eps = eps
 
-        return x
+    def __call__(self, sample):
+        return quantil_normalize(sample, pmin=self.pmin, pmax=self.pmax, clip=self.clip,
+                                 axis=self.axis, dtype=None, eps=self.eps).float()
+
+
 
 def pre_channel(img, fun):
     if len(img.shape) == 3:

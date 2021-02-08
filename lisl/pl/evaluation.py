@@ -240,10 +240,9 @@ class SupervisedLinearSegmentationValidation(Callback, BuildFromArgparse):
 
 class AnchorSegmentationValidation(Callback):
 
-    def __init__(self, run_ms_segmentation=True, edim=2, device='cpu'):
+    def __init__(self, run_ms_segmentation=True, device='cpu'):
         self.run_ms_segmentation = run_ms_segmentation
         self.device = device
-        self.edim = edim
 
         super().__init__()
 
@@ -259,6 +258,8 @@ class AnchorSegmentationValidation(Callback):
 
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
 
+        edim = pl_module.out_channels
+
         with torch.no_grad():
             x, patches, abs_coords, patch_matches, mask, y = batch
 
@@ -273,8 +274,8 @@ class AnchorSegmentationValidation(Callback):
                           overlap_size=patch_size-1,
                           dilation=1)
 
-            embedding_relative = torch.empty((x.shape[0], self.edim) + x.shape[-2:])
-            embedding = torch.empty((x.shape[0], self.edim) + x.shape[-2:])
+            embedding_relative = torch.empty((x.shape[0], edim) + x.shape[-2:])
+            embedding = torch.empty((x.shape[0], edim) + x.shape[-2:])
             for i in range(x.shape[-2]):
                 patches = torch.stack(list(pf(x0) for x0 in padded[:, :, i:i+(patch_size)]))
                 # patches.shape = (batch_size, num_patches, 2, patch_width, patch_height)
@@ -284,8 +285,8 @@ class AnchorSegmentationValidation(Callback):
                 pred_i = pl_module.forward_patches(patches)
                 pred_i = pred_i.to(embedding.device)
 
-                embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, self.edim, x.shape[-1])
-                embedding[:, :, i] = pred_i.permute(0, 2, 1).view(b, self.edim, x.shape[-1])
+                embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
+                embedding[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
                 embedding[:, 0, i] += torch.arange(x.shape[-1])[None]
                 embedding[:, 1, i] += i
 
@@ -303,10 +304,18 @@ class AnchorSegmentationValidation(Callback):
             return out
 
         for b, e in enumerate(embedding.cpu().numpy()):
-            imsave(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg", np.stack((n(e[0]), n(x[b, 0].cpu().numpy()), n(e[1])), axis=-1))
+            for c in range(0, embedding.shape[1], 2):
+                imsave(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}_{c}.jpg", np.stack((n(e[c]), n(x[b, 0].cpu().numpy()), n(e[c+1])), axis=-1))
 
-        for b, e in enumerate(embedding_relative.cpu().numpy()):
-            imsave(f"{eval_directory}/rel_embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg", np.stack((n(e[0]), n(x[b, 0].cpu().numpy()), n(e[1])), axis=-1))
+        embedding_relative = embedding_relative.cpu().numpy()
+        for b, e in enumerate(embedding_relative):
+
+            z_array = zarr.open(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}.zarr", mode="w")
+            z_array.create_dataset(f"embedding", data=e, compression='gzip')
+            z_array.create_dataset(f"raw", data=x[b].cpu().numpy(), compression='gzip')
+
+
+            imsave(f"{eval_directory}/rel_embedding_{batch_idx}_{pl_module.local_rank}_{b}_{c}.jpg", np.stack((n(e[0]), n(x[b, 0].cpu().numpy()), n(e[1])), axis=-1))
             cx = np.arange(e.shape[-2], dtype=np.float32)
             cy = np.arange(e.shape[-1], dtype=np.float32)
             coords = np.meshgrid(cx, cy, copy=True)
@@ -315,16 +324,16 @@ class AnchorSegmentationValidation(Callback):
             e_transposed = np.transpose(e, (1,2,0))
             # downsample_factor
             dsf = 8
-
-
-            patch_coords = coords[dsf//2::dsf, dsf//2::dsf].reshape(-1, self.edim)
-            patch_embedding = e_transposed[dsf//2::dsf, dsf//2::dsf].reshape(-1, self.edim)
+            spatial_dims = coords.shape[-1]
+            patch_coords = coords[dsf//2::dsf, dsf//2::dsf].reshape(-1, spatial_dims)
+            patch_embedding = e_transposed[dsf//2::dsf, dsf//2::dsf, :spatial_dims].reshape(-1, spatial_dims)
 
             vis_anchor_embedding(patch_embedding,
                                  patch_coords,
                                  n(x[b].cpu().numpy()),
                                  grad=None,
-                                 output_file=f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg")
+                                 output_file=[f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg",
+                                              f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}_{b}.pdf"])
 
         if self.run_ms_segmentation:
             b, c, w, h = embedding.shape

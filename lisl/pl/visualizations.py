@@ -18,13 +18,23 @@ def vis_anchor_embedding(embedding, patch_coords, img, grad=None, output_file=No
     else:
       plt.imshow(np.transpose(img, (1, 2, 0)), interpolation='nearest')
 
-    plt.quiver(patch_coords[:, 0],
-               patch_coords[:, 1],
-               embedding[:, 0],
-               embedding[:, 1], 
-               angles='xy',
-               scale_units='xy',
-               scale=1., color='#8fffdd')
+    if isinstance(embedding, list):
+      for e in embedding:
+        plt.quiver(patch_coords[:, 0],
+           patch_coords[:, 1],
+           e["embedding"][:, 0],
+           e["embedding"][:, 1], 
+           angles='xy',
+           scale_units='xy',
+           scale=1., color=e["color"])
+    else:
+      plt.quiver(patch_coords[:, 0],
+                 patch_coords[:, 1],
+                 embedding[:, 0],
+                 embedding[:, 1], 
+                 angles='xy',
+                 scale_units='xy',
+                 scale=1., color='#8fffdd')
 
     if grad is not None:
         plt.quiver(patch_coords[:, 0],
@@ -39,6 +49,10 @@ def vis_anchor_embedding(embedding, patch_coords, img, grad=None, output_file=No
     plt.axis('off')
 
     if output_file is not None:
+      if isinstance(output_file, (list, tuple)):
+        for of in output_file:
+          plt.savefig(of, dpi=300, bbox_inches='tight')
+      else:
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
 
     # buf = io.BytesIO()

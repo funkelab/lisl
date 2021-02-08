@@ -2,8 +2,11 @@ import argparse
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
-from lisl.pl.dataset import PatchedDataset, SparseChannelDataset, RandomShiftDataset, DSBDataset
+from lisl.pl.dataset import (PatchedDataset, SparseChannelDataset, 
+  RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
+  DSBTrainAugmentations, DSBTestAugmentations)
 from torchvision import transforms, datasets
+from lisl.pl.utils import QuantileNormalizeTorchTransform
 
 class SSLDataModule(pl.LightningDataModule):
 
@@ -221,21 +224,64 @@ class AnchorDataModule(pl.LightningDataModule):
 
 class DSBDataModule(AnchorDataModule):
 
-    def setup_datasets(self):
+  def setup_datasets(self):
 
-      full_ds = DSBDataset(self.dspath)
-      train_set_size = int(len(full_ds) * 0.90)
-      val_set_size = len(full_ds) - train_set_size
-      torch.manual_seed(100)
-      dsb_train, dsb_val = torch.utils.data.random_split(
-                              full_ds,
-                              [train_set_size, val_set_size])
+    full_ds = DSBDataset(self.dspath)
+    train_set_size = int(len(full_ds) * 0.90)
+    val_set_size = len(full_ds) - train_set_size
+    torch.manual_seed(100)
+    dsb_train, dsb_val = torch.utils.data.random_split(
+                            full_ds,
+                            [train_set_size, val_set_size])
 
-      # add different augmentations to train and val datasets
-      dsb_train = DSBTrainAugmentations(dsb_train)
-      dsb_val = DSBTestAugmentations(dsb_val)
+    # add different augmentations to train and val datasets
+    dsb_train = DSBTrainAugmentations(dsb_train,
+                                      scale=self.scale)
+    dsb_val = DSBTestAugmentations(dsb_val,
+                                   scale=self.scale)
 
-      return dsb_train, dsb_val
+    return dsb_train, dsb_val
+
+
+class UsiigaciDataModule(AnchorDataModule):
+
+  def setup_datasets(self):
+
+    ds_train = UsiigaciDataset(
+        self.dspath,
+        "train")
+
+    ds_val = UsiigaciDataset(
+        self.dspath,
+        "val")
+
+    # add different augmentations to train and val datasets
+    ds_train = DSBTrainAugmentations(ds_train,
+                                     scale=self.scale)
+    ds_val = DSBTestAugmentations(ds_val,
+                                  scale=self.scale)
+
+    return ds_train, ds_val
+
+class Bbbc010DataModule(AnchorDataModule):
+
+  def setup_datasets(self):
+
+    ds_train = Bbbc010Dataset(
+        self.dspath,
+        "train")
+
+    ds_val = Bbbc010Dataset(
+        self.dspath,
+        "val")
+
+    # add different augmentations to train and val datasets
+    ds_train = DSBTrainAugmentations(ds_train,
+                                     scale=self.scale)
+    ds_val = DSBTestAugmentations(ds_val,
+                                  scale=self.scale)
+
+    return ds_train, ds_val
 
 class OpenImagesDataModule(AnchorDataModule):
 
@@ -279,7 +325,6 @@ class CelebADataModule(AnchorDataModule):
 
       dsb_val = datasets.CelebA(self.dspath,
                                   download=False,
-                                  split='valid',
                                   transform=transforms.Compose([
                                     transforms.Resize(self.shape),
                                     transforms.CenterCrop(self.shape),

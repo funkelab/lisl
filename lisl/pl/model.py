@@ -46,25 +46,34 @@ class UnPatchify(object):
         x = x.squeeze(0)
         return x
 
-class PatchedResnet50(nn.Module):
+class PatchedResnet(nn.Module):
 
     def __init__(
             self,
             in_channels,
             out_channels,
+            resnet_size=18,
             pretrained=False):
 
         super().__init__()
 
-        model = models.resnet50(pretrained=pretrained)
-        if in_channels != 1:
+        if resnet_size == 18:
+            model = models.resnet18(pretrained=pretrained)
+            features_in_last_layer = 512
+        elif resnet_size == 50:
+            model = models.resnet50(pretrained=pretrained)
+            features_in_last_layer = 2048
+        else:
+            raise NotImplementedError()
+
+        if in_channels != 3:
             ptweights = model.conv1.weight.mean(dim=1, keepdim=True).data
             model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, padding=3, bias=False)
             if in_channels == 1:
                 model.conv1.weight.data = ptweights
 
         # turn last layer into a 2d convolution
-        fc_conv = nn.Conv2d(2048, out_channels, kernel_size=1, padding=0, bias=True)
+        fc_conv = nn.Conv2d(features_in_last_layer, out_channels, kernel_size=1, padding=0, bias=True)
         fc_conv.weight.data = 1. * fc_conv.weight.data
         fc_conv.bias.data = 1. * fc_conv.bias.data
         # fc_conv.weight.data = model.fc.weight.data[:out_channels, :, None, None]

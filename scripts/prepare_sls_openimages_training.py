@@ -21,10 +21,10 @@ if __name__ == '__main__':
 
     for lr in [1e-5]:
       for patchsize in [16]:
-        for regularization in [10., 1., 0.1, 0.01, 0.00001]:
+        for regularization in [0.1, 0.01, 0.001, 0.0001, 0.00001]:
           for img_scale in [1.]:
 
-            hidden_channels = 2
+            out_channels = 2
             stride = 9
             patchdilation = 1
             patch_factor = patchsize//16
@@ -32,7 +32,7 @@ if __name__ == '__main__':
             dist_factor = 20 * patch_factor
 
             args = options.args + f" --initial_lr {lr}"
-            args += f" --hidden_channels {hidden_channels}"
+            args += f" --out_channels {out_channels}"
             args += f" --patch_size {patchsize}"
             args += f" --dataset {options.datamodule}"
             args += f" --in_channels 3"
