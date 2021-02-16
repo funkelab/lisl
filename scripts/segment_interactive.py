@@ -6,7 +6,10 @@ import neuroglancer
 import numpy as np
 import time
 import webbrowser
-
+import mlpack as mlp
+import unionfind
+from skimage.measure import label
+import networkx as nx
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -19,11 +22,11 @@ parser.add_argument(
     '-rd',
     type=str,
     help="The name of the raw dataset")
-parser.add_argument(
-    '--emb-file',
-    '-ef',
-    type=str,
-    help="The path to the embedding container to use")
+#parser.add_argument(
+#    '--emb-file',
+#    '-ef',
+#    type=str,
+#    help="The path to the embedding container to use")
 parser.add_argument(
     '--emb-dataset',
     '-ed',
@@ -39,7 +42,7 @@ class Classifier:
         self.embedding_shape = embedding.shape[1:]
 
         print("Reading embedding into memory...")
-        self.embedding = embedding.data[:].transpose((1, 2, 3, 0))
+        self.embedding = embedding.data[:].transpose((1, 2, 0))
         self.embedding = self.embedding.reshape(-1, self.num_features)
         print("...done")
         print(f"Flattened embedding shape: {self.embedding.shape}")
@@ -53,8 +56,8 @@ class Classifier:
 
         z, y, x = pos
         return (
-            int(z)*self.embedding_shape[2]*self.embedding_shape[1] +
-            int(y)*self.embedding_shape[2] +
+            int(z)*self.embedding_shape[1]*self.embedding_shape[0] +
+            int(y)*self.embedding_shape[1] +
             int(x))
 
     def add_sample(self, pos, label):
@@ -96,11 +99,19 @@ class Classifier:
 
 class InteractiveSegmentation:
 
-    def __init__(self, raw, embedding, classifier):
+    def __init__(self, raw, embedding, mst, classifier):
 
         self.raw = raw
         self.embedding = embedding
         self.classifier = classifier
+        self.mst = mst
+
+        self.points = []
+
+        self.mst_graph = nx.Graph()
+        self.mst_graph.add_weighted_edges_from(mst)
+
+        self.threshold = 0.5
 
         self.raw_dimensions = neuroglancer.CoordinateSpace(
             names=['z', 'y', 'x'],
@@ -118,9 +129,9 @@ class InteractiveSegmentation:
         volume_shape = raw.shape
 
         print(f"Creating segmentation layer with shape {volume_shape}")
-        self.segmentation = np.zeros(
-            volume_shape,
-            dtype=np.uint8)
+        self.segmentation = np.arange(np.product(volume_shape),dtype=np.uint32)
+        self.segmentation = self.segmentation.reshape(volume_shape)
+        
         self.segmentation_volume = neuroglancer.LocalVolume(
             data=self.segmentation,
             dimensions=self.raw_dimensions)
@@ -156,19 +167,50 @@ class InteractiveSegmentation:
         self.classifier.fit()
 
     def _update_segmentation(self, action_state):
+        
+        if len(self.points) < 2:
+            return
 
-        self.segmentation[:] = self.classifier.predict()
+
+        n_pixels = np.product(self.embedding.data.shape[1:])
+        uf = unionfind.UnionFind(n_pixels)
+
+        label_image = np.zeros((1, ) + self.embedding.data.shape[1:])
+
+        # find minimal threshold
+        threshold = None
+        for p0 in self.points:
+            for p1 in self.points:
+                if p0 < p1:
+                    min_max_edge = None
+                    short_path = nx.shortest_path(self.mst_graph, p0, p1)
+                    for u, v in zip(short_path, short_path[1:]):
+                        weight = self.mst_graph.get_edge_data(u, v)['weight']
+                        if min_max_edge is None or weight > min_max_edge:
+                            min_max_edge = weight
+
+                    if threshold is None or threshold > min_max_edge:
+                        threshold = min_max_edge
+
+        uf.union_array(mst[mst[:, 2] < threshold][:, :2].astype(np.uint32))
+        label_image = uf.get_label_image(self.embedding.data.shape[1:])[None]
+        label_image = label_image.astype(np.uint32)
+        self.segmentation[:] = label_image
         self.update_view()
 
     def update_view(self):
-
         self.segmentation_volume.invalidate()
 
     def _label_fg(self, action_state):
         pos = action_state.mouse_voxel_coordinates
         if pos is None:
             return
-        self.label(pos, 1)
+        print(self.segmentation.shape)
+        self.points.append(int((self.segmentation.shape[1] * int(pos[1])) + int(pos[2])))
+        print("pos", pos)
+        print(self.points)
+        print("------------------------------------")
+        self._update_segmentation(action_state)
 
     def _label_bg(self, action_state):
         pos = action_state.mouse_voxel_coordinates
@@ -185,7 +227,31 @@ if __name__ == "__main__":
 
     raw = daisy.open_ds(args.raw_file, args.raw_dataset)
     print("raw is open")
-    embedding = daisy.open_ds(args.emb_file, args.emb_dataset)
+    embedding = daisy.open_ds(args.raw_file, args.emb_dataset)
+    # mst = mlp.emst(embedding)["output"]
+    channels = embedding.shape[0]
+    
+    embedding_transp = np.array(embedding.data).transpose(1,2,0)
+
+    cx = np.arange(embedding_transp.shape[1], dtype=embedding_transp.dtype)
+    cy = np.arange(embedding_transp.shape[0], dtype=embedding_transp.dtype)
+    coords = np.meshgrid(cx, cy, copy=True)
+    coords = np.stack(coords, axis=-1)
+
+    embedding_transp += coords
+    embedding_transp = embedding_transp.reshape((-1, channels))
+
+    mst = mlp.emst(embedding_transp)["output"]
+
+    # label_image = label(label_image).astype(np.uint32)
+    # for i in range(embedding_transp.shape[0]//10):
+    #     u,v,s = mst[i]
+    #     uf.union(int(u), int(v))
+
+    # from tqdm import tqdm
+    # for i in tqdm(range(embedding_transp.shape[0])):
+    #     label_image.flatten()[i] = uf.find(i)
+
     print("embedding is open")
     
     print(raw.data.shape, embedding.data.shape)
@@ -213,6 +279,7 @@ if __name__ == "__main__":
     interactive_segmentation = InteractiveSegmentation(
         raw,
         embedding,
+        mst,
         classifier)
 
     url = str(interactive_segmentation.viewer)

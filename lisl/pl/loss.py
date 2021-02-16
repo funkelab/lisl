@@ -2,6 +2,8 @@ from torch.nn.modules.module import Module
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+import gc
+from time import sleep
 
 class AnchorLoss(Module):
     r"""
@@ -50,11 +52,18 @@ class AnchorPlusLoss(Module):
         spatial_dim (int): Number of spatial dimensions
     """
 
-    def __init__(self, anchor_radius) -> None:
+    def __init__(self, anchor_radius,) -> None:
         super().__init__()
         self.anchor_radius = anchor_radius
+        self.xnt_loss = torch.nn.CrossEntropyLoss(reduction='sum')
         # self.proxy_anchor_loss = losses.ProxyAnchorLoss()
 
+    def set_anchor_radius(self, new_radius):
+        self.anchor_radius = new_radius
+
+    def multiply_anchor_radius(self, gamma):
+        if self.anchor_radius > 1.:
+            self.anchor_radius *= gamma
 
     def forward(self, embedding, abs_coords, patch_mask=None) -> Tensor:
         # embedding.shape = (b, p, c)
@@ -67,64 +76,38 @@ class AnchorPlusLoss(Module):
         abs_embedding = embedding[..., :sdim] + abs_coords
 
         coord_diff = abs_coords[:, :, None] - abs_coords[:, None]
-        e0 = embedding[:, :, None, ..., :sdim]
-        e1 = embedding[:, None, :, ..., :sdim]
+        e0 = embedding[:, :, None]
+        e1 = embedding[:, None, :]
 
         # compute all pairwise distances of anchor embeddings
-        diff = (e0 - e1) + coord_diff
+        diff = (e0 - e1)
+        diff[..., :2] += coord_diff
         dist = diff.norm(2, dim=-1)
-        # dist.shape = (b, p, p)
 
-        nonlinear_dist = (dist - self.anchor_radius).sigmoid()
+        sim = 1-(((dist*5)/self.anchor_radius)-5).sigmoid()
+
+        patch_mask = patch_mask
+        neg_patch_mask = patch_mask.clone()
+        for b in range(len(neg_patch_mask)):
+            neg_patch_mask[b].fill_diagonal_(True)
         
-        # only matched patches (e.g. patches close in proximity)
-        # contripute to the loss
-        if patch_mask is not None:
-            nonlinear_dist = nonlinear_dist[patch_mask]
+        loss = 0.
+        neg_masked_sim = sim.masked_fill(neg_patch_mask, float('-inf'))
 
-        spatial_loss = nonlinear_dist.sum()
+        target = torch.zeros(neg_patch_mask.shape[-1], dtype=torch.long, device=sim.device)
+        tmp_smpl = []
 
-        # NTXent loss for non spatial dimensions:
-        # also known as temperature-scaled cross-entropy loss
+        for row_index in range(patch_mask.shape[-1]):
 
-        # max_val = torch.max(pos_pairs, torch.max(neg_pairs, dim=1, keepdim=True)[0].half()) ###This is the line change
-        # numerator = torch.exp(pos_pairs - max_val).squeeze(1)
-        # denominator = torch.sum(torch.exp(neg_pairs - max_val), dim=1) + numerator
-        # log_exp = torch.log((numerator/denominator) + 1e-20)
+            column_mask = patch_mask[:, :, row_index]
+            # sim[column_mask].masked_fill(~patch_mask[column_mask], float('-inf'))
 
-        if embedding.shape[-1] == sdim:
-            # only spatial dimensions found
-            # returning spatial loss
-            return spatial_loss
+            positive_sample = sim[column_mask, row_index]
+            negative_samples = neg_masked_sim[column_mask]
+            samples = torch.cat((positive_sample[..., None], negative_samples), dim=-1)
+            
+            tmp_smpl.append((samples))
+            loss = loss + self.xnt_loss(samples, target[:len(samples)])
 
-        sim = F.cosine_similarity(embedding[:, :, None, ..., sdim:],
-                                  embedding[:, None, ..., sdim:], -1, 1e-8)
-        # sim.shape= (b, p, p)
+        return loss
 
-        positive_mask = (dist.detach() < self.anchor_radius)
-        negative_mask = (~positive_mask).clone()
-
-        if patch_mask is not None:
-            positive_mask.masked_fill_(~patch_mask, 0)
-            negative_mask.masked_fill_(~patch_mask, 0)
-        else:
-            # mask out diagonal entries
-            mask = torch.eye(positive_mask.shape[-2], positive_mask.shape[-1]).bool()
-            positive_mask.masked_fill_(mask[None].to(positive_mask.device), 0)
-
-        margin = 0.1
-        alpha = 32.
-
-        num_pos_samples = positive_mask.sum(dim=(1, 2))
-        num_neg_samples = negative_mask.sum(dim=(1, 2))
-        print("pos/neg samples", num_pos_samples, num_neg_samples)
-
-        pos_sim = -alpha*((sim - margin).masked_fill_(~positive_mask, 0))
-        pos_loss = (F.softplus((pos_sim.logsumexp(dim=2)))).sum(1)
-        pos_loss = (pos_loss / (num_pos_samples + 1e-8)).sum()
-
-        neg_sim = +alpha*((sim + margin).masked_fill_(~negative_mask, 0))
-        neg_loss = (F.softplus((pos_sim.logsumexp(dim=2)))).sum(1)
-        neg_loss = (neg_loss / (num_neg_samples + 1e-8)).sum()
-
-        return spatial_loss + pos_loss + neg_loss

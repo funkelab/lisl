@@ -282,7 +282,7 @@ class AnchorSegmentationValidation(Callback):
                 b, p, c, pw, ph = patches.shape
 
                 patches = patches.cuda()
-                pred_i = pl_module.forward_patches(patches)
+                pred_i = pl_module.forward_patches(patches, flip_augmentation=True)
                 pred_i = pred_i.to(embedding.device)
 
                 embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
@@ -312,6 +312,7 @@ class AnchorSegmentationValidation(Callback):
 
             z_array = zarr.open(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}.zarr", mode="w")
             z_array.create_dataset(f"embedding", data=e, compression='gzip')
+            z_array.create_dataset(f"embedding_abs", data=embedding.cpu().numpy()[b], compression='gzip')
             z_array.create_dataset(f"raw", data=x[b].cpu().numpy(), compression='gzip')
 
 

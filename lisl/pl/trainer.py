@@ -196,11 +196,12 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                                 "img"))
                 os.makedirs(img_directory, exist_ok=True)
                 for b in range(len(embedding)):
-                    vis_anchor_embedding(embedding[b].detach().cpu().numpy(),
-                        abs_coords[b].detach().cpu().numpy(),
-                        x[b].detach().cpu().numpy(),
-                        output_file=[f"{img_directory}/vis_{self.global_step}_{self.local_rank}_{b}.jpg",
-                                     f"{img_directory}/vis_{self.global_step}_{self.local_rank}_{b}.pdf"])
+                    for c in range(0, embedding.shape[-1]-1, 2):
+                        vis_anchor_embedding(embedding[b, ..., c:c+2].detach().cpu().numpy(),
+                            abs_coords[b].detach().cpu().numpy(),
+                            x[b].detach().cpu().numpy(),
+                            output_file=[f"{img_directory}/vis_{self.global_step}_{self.local_rank}_{b}.jpg",
+                                         f"{img_directory}/vis_{self.global_step}_{self.local_rank}_{b}.pdf"])
 
             if embedding.requires_grad:
                 def log_hook(grad_input):
@@ -210,7 +211,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                               "img"))
                     os.makedirs(img_directory, exist_ok=True)
                     for b in range(len(embedding)):
-                        for c in range(0, embedding.shape[-1]-2, 2):
+                        for c in range(0, embedding.shape[-1]-1, 2):
                             vis_anchor_embedding(embedding[b, ..., c:c+2].detach().cpu().numpy(),
                                 abs_coords[b].detach().cpu().numpy(),
                                 x[b].detach().cpu().numpy(),
@@ -223,8 +224,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
         # detach masked  boundary patches
         embedding = ((mask[..., None]).float() * embedding.detach()) + ((~mask[..., None]).float() * embedding)
-
         anchor_loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         reg_loss = self.regularization * embedding.norm(2, dim=-1).sum()
         self.log('reg_loss', reg_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
@@ -234,6 +235,12 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         tensorboard_logs = {'train_loss': loss.detach()}
         tensorboard_logs['iteration'] = self.global_step
 
+        if self.global_step == 1000:
+            self.anchor_loss.multiply_anchor_radius(4.)
+        if self.global_step == 2000:
+            self.anchor_loss.multiply_anchor_radius(1/16.)
+
+        self.log('anchor_radius', self.anchor_loss.anchor_radius, on_step=True, on_epoch=True, logger=True)
         return {'loss': loss, 'log': tensorboard_logs}
 
     def validation_step(self, batch, batch_nb):
@@ -242,12 +249,16 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         with torch.no_grad():
 
             if self.val_patch_inference_steps is not None:
-                embedding = self.sliced_cpu_forward_patches(patches)
+                embedding = self.sliced_cpu_forward_patches(patches, flip_augmentation=True)
                 abs_coords = abs_coords.cpu()
                 patch_matches = patch_matches.cpu()
             else:
-                embedding = self.forward_patches(patches)
-            loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+                embedding = self.forward_patches(patches, flip_augmentation=True)
+
+            print("Warning: skipping validation loss because of limited memory")
+            loss = torch.Tensor([0.])
+            # loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+            
             self.log('val_loss', loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
         return {'val_loss': loss}
@@ -257,7 +268,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
         return [optimizer], [scheduler]
 
-    def sliced_cpu_forward_patches(self, patches):
+    def sliced_cpu_forward_patches(self, patches, flip_augmentation=True):
         vpis = self.val_patch_inference_steps
         # apply forward patch on small slices to  
         # reduce memory footprint
@@ -266,8 +277,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         for b in range(patches.shape[0]):
             e_slice = []
             for c in range(0, patches.shape[1], vpis):
-                e_slice.append(self.forward_patches(patches[b:b+1, c:c+vpis]).cpu())
-                print([s.shape for s in e_slice])
+                e_slice.append(self.forward_patches(patches[b:b+1, c:c+vpis],
+                                                    flip_augmentation=flip_augmentation).cpu())
             e_slice = torch.cat(e_slice, dim=1)
             embedding.append(e_slice)
         embedding = torch.cat(embedding, dim=0)

@@ -191,6 +191,7 @@ class AnchorDataModule(pl.LightningDataModule):
                           shuffle=True,
                           batch_size=self.batch_size,
                           num_workers=self.loader_workers,
+                          worker_init_fn=pl.utilities.seed.seed_everything,
                           drop_last=False)
 
     def val_dataloader(self):
@@ -198,6 +199,7 @@ class AnchorDataModule(pl.LightningDataModule):
                           batch_size=self.batch_size,
                           shuffle=False,
                           num_workers=self.loader_workers,
+                          worker_init_fn=pl.utilities.seed.seed_everything,
                           drop_last=False)
 
     def test_dataloader(self):
@@ -236,7 +238,8 @@ class DSBDataModule(AnchorDataModule):
 
     # add different augmentations to train and val datasets
     dsb_train = DSBTrainAugmentations(dsb_train,
-                                      scale=self.scale)
+                                      scale=self.scale,
+                                      output_shape=self.shape)
     dsb_val = DSBTestAugmentations(dsb_val,
                                    scale=self.scale)
 
@@ -257,7 +260,8 @@ class UsiigaciDataModule(AnchorDataModule):
 
     # add different augmentations to train and val datasets
     ds_train = DSBTrainAugmentations(ds_train,
-                                     scale=self.scale)
+                                     scale=self.scale,
+                                     output_shape=self.shape)
     ds_val = DSBTestAugmentations(ds_val,
                                   scale=self.scale)
 
@@ -277,7 +281,8 @@ class Bbbc010DataModule(AnchorDataModule):
 
     # add different augmentations to train and val datasets
     ds_train = DSBTrainAugmentations(ds_train,
-                                     scale=self.scale)
+                                     scale=self.scale,
+                                     output_shape=self.shape)
     ds_val = DSBTestAugmentations(ds_val,
                                   scale=self.scale)
 

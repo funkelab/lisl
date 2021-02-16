@@ -27,13 +27,12 @@ if __name__ == '__main__':
     ds_args = parser.parse_known_args()[0]
     dmodule = import_by_string(f'lisl.pl.datamodules.{ds_args.dataset}')
 
-    print(dmodule)
-    
+    pl.utilities.seed.seed_everything(42)
     parser = SSLTrainer.add_model_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
     parser = dmodule.add_argparse_args(parser)
     parser = dmodule.add_model_specific_args(parser)
-    # parser = SupervisedLinearSegmentationValidation.add_model_specific_args(parser)
+
     args = parser.parse_args()
 
     # init module
