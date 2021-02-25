@@ -309,14 +309,16 @@ class AnchorSegmentationValidation(Callback):
 
         embedding_relative = embedding_relative.cpu().numpy()
         for b, e in enumerate(embedding_relative):
+            for c in range(0, embedding.shape[1], 2):
+                imsave(f"{eval_directory}/rel_embedding_{batch_idx}_{pl_module.local_rank}_{b}_{c}.jpg", np.stack((n(e[c]), n(x[b, 0].cpu().numpy()), n(e[c+1])), axis=-1))
+
+        for b, e in enumerate(embedding_relative):
 
             z_array = zarr.open(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}.zarr", mode="w")
             z_array.create_dataset(f"embedding", data=e, compression='gzip')
             z_array.create_dataset(f"embedding_abs", data=embedding.cpu().numpy()[b], compression='gzip')
             z_array.create_dataset(f"raw", data=x[b].cpu().numpy(), compression='gzip')
 
-
-            imsave(f"{eval_directory}/rel_embedding_{batch_idx}_{pl_module.local_rank}_{b}_{c}.jpg", np.stack((n(e[0]), n(x[b, 0].cpu().numpy()), n(e[1])), axis=-1))
             cx = np.arange(e.shape[-2], dtype=np.float32)
             cy = np.arange(e.shape[-1], dtype=np.float32)
             coords = np.meshgrid(cx, cy, copy=True)

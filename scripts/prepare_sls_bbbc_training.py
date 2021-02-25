@@ -5,7 +5,7 @@ import numpy as np
 def run(lr,
         patchsize,
         regularization,
-        dist_factor,
+        positive_radius,
         image_scale,
         anchor_radius,
         out_channels,
@@ -15,7 +15,7 @@ def run(lr,
     args += f" --out_channels {out_channels}"
     args += f" --patch_size {patchsize}"
     args += f" --patch_overlap {patchsize-stride}"
-    args += f" --max_dist {dist_factor}"
+    args += f" --positive_radius {positive_radius}"
     args += f" --dataset Bbbc010DataModule"
     args += f" --regularization {regularization}"
     args += f" --anchor_radius {anchor_radius}"
@@ -63,12 +63,12 @@ if __name__ == '__main__':
 
     base_lr = 4e-5
     base_patchsize = 16
-    base_regularization = 0.0001
-    base_dist_factor = 30
-    base_image_scale = 0.4
-    base_anchor_radius = 10
-    base_out_channels = 16
-    base_stride = 9
+    base_regularization = 0.
+    base_dist_factor = 15
+    base_image_scale = 1.
+    base_anchor_radius = 6
+    base_out_channels = 8
+    base_stride = 5
     base_patchdilation = 1
 
     for out_channels in range(2, 16, 2):
@@ -93,30 +93,30 @@ if __name__ == '__main__':
     #         stride)
     #     experiment_number += 1
 
-    # for regularization in np.logspace(-4, -2.5, base=10., num=10):
-    #     run(base_lr,
-    #         base_patchsize,
-    #         regularization,
-    #         base_dist_factor,
-    #         base_image_scale,
-    #         base_anchor_radius,
-    #         base_out_channels,
-    #         base_stride)
-    #     experiment_number += 1
+    for regularization in np.logspace(-7, -2.5, base=10., num=10):
+        run(base_lr,
+            base_patchsize,
+            regularization,
+            base_dist_factor,
+            base_image_scale,
+            base_anchor_radius,
+            base_out_channels,
+            base_stride)
+        experiment_number += 1
 
-    # for dist_factor in np.linspace(10, 50, num=10):
-    #     run(base_lr,
-    #         base_patchsize,
-    #         base_regularization,
-    #         int(dist_factor),
-    #         base_image_scale,
-    #         base_anchor_radius,
-    #         base_out_channels,
-    #         base_stride)
-    #     experiment_number += 1
+    for dist_factor in np.linspace(8, 30, num=10):
+        run(base_lr,
+            base_patchsize,
+            base_regularization,
+            int(dist_factor),
+            base_image_scale,
+            base_anchor_radius,
+            base_out_channels,
+            base_stride)
+        experiment_number += 1
 
 
-    # for image_scale in np.linspace(1., 3., num=10):
+    # for image_scale in np.linspace(0.4, 2., num=10):
     #     run(base_lr,
     #         base_patchsize,
     #         base_regularization,

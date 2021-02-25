@@ -146,7 +146,7 @@ class MosaicDataModule(pl.LightningDataModule):
 class AnchorDataModule(pl.LightningDataModule):
 
     def __init__(self, batch_size, dspath,
-                 shape=(256, 256), loader_workers=10, max_dist=64,
+                 shape=(256, 256), loader_workers=10, positive_radius=32,
                  image_scale=1., patch_size=16, patch_overlap=5):
 
         super().__init__()
@@ -156,7 +156,7 @@ class AnchorDataModule(pl.LightningDataModule):
         self.loader_workers = loader_workers
         self.patch_size = patch_size
         self.patch_overlap = patch_overlap
-        self.max_dist = max_dist
+        self.positive_radius = positive_radius
         self.scale = image_scale
 
     def setup_datasets(self):
@@ -171,7 +171,7 @@ class AnchorDataModule(pl.LightningDataModule):
                                 self.shape,
                                 self.patch_size,
                                 self.patch_overlap,
-                                self.max_dist,
+                                self.positive_radius,
                                 scale=self.scale,
                                 augment=True,
                                 return_segmentation=False)
@@ -181,7 +181,7 @@ class AnchorDataModule(pl.LightningDataModule):
                                 self.shape,
                                 self.patch_size,
                                 self.patch_overlap,
-                                self.max_dist,
+                                self.positive_radius,
                                 scale=self.scale,
                                 augment=False,
                                 return_segmentation=True)
@@ -218,7 +218,7 @@ class AnchorDataModule(pl.LightningDataModule):
         parser.add_argument('--shape', nargs='*', default=(256, 256))
         parser.add_argument('--patch_size', type=int, default=16)
         parser.add_argument('--patch_overlap', type=int, default=5)
-        parser.add_argument('--max_dist', type=int, default=128)
+        parser.add_argument('--positive_radius', type=int, default=64)
         parser.add_argument('--image_scale', type=float, default=1.)
 
         return parser

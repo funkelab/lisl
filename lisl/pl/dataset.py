@@ -497,7 +497,8 @@ class DSBTestAugmentations(Dataset):
     def test_transforms(self):
         if self._test_transforms is None:
             self._test_transforms = Compose(QuantileNormalize(apply_to=[0]),
-                                            Scale(self.scale))
+                                            Scale(self.scale),
+                                            CenterCrop(self.output_shape))
         return self._test_transforms
 
     def __len__(self):
@@ -510,6 +511,9 @@ class DSBTestAugmentations(Dataset):
         x, y = self.test_transforms(x, y)
         return x, y
 
+
+
+
 class PatchedDataset(Dataset):
 
     def __init__(self,
@@ -517,10 +521,10 @@ class PatchedDataset(Dataset):
                  output_shape,
                  patch_size,
                  patch_overlap,
-                 max_dist,
+                 positive_radius,
                  scale=1.,
-                 max_imbalance_dist=0.01,
                  augment=True,
+                 add_negative_samples=False,
                  return_segmentation=True):
         """
         max_imbalance_dist: int
@@ -534,14 +538,22 @@ class PatchedDataset(Dataset):
         self.root_dataset = dataset
         self.augment = augment
         self.return_segmentation = return_segmentation
-        self.max_dist = max_dist
-        self.max_imbalance_dist = max_imbalance_dist
         self.output_shape = tuple(int(_) for _ in output_shape)
         self.scale = scale
+        self.positive_radius = positive_radius
+
+        self.add_negative_samples = add_negative_samples
+        if self.add_negative_samples:
+            self.neutral_radius = self.positive_radius * 2.
+            self.negative_radius = self.positive_radius * 2.236
+  
+
 
         self.patchify = Patchify(patch_size=patch_size,
                                  overlap_size=patch_overlap,
                                  dilation=1)
+
+        # assert(patch_overlap > patch_size - patch_overlap)
 
         self._connection_matrix = None
         self._coords = None
@@ -577,16 +589,28 @@ class PatchedDataset(Dataset):
         squared_distances = ((patch_coords[None] - patch_coords[:, None])**2).sum(axis=-1)
         # squared_distances.shape = (num_patches, num_patches)
 
-        squared_distances[squared_distances > self.max_dist**2] = 0
-        connection_matrix = (squared_distances != 0)
+        # turn squared_distances into connection matrix by thresholding
+
+        if self.add_negative_samples:
+            squared_distances[squared_distances > self.negative_radius**2] = 0
+            squared_distances[squared_distances > self.neutral_radius**2] = -1
+        squared_distances[squared_distances > self.positive_radius**2] = 0.
+        squared_distances[squared_distances > 0.] = 1
+        # remove "self" connections
+        connection_matrix = squared_distances
+        connection_matrix.fill_diagonal_(0)
+        connection_matrix = connection_matrix.char()
+        assert(torch.any(connection_matrix > 0))
 
         # filter non balanced patches
-        avg_diff = (connection_matrix[..., None].numpy() * (patch_coords[None] - patch_coords[:, None]).numpy())
+        avg_diff = ((connection_matrix[..., None] != 0).numpy() * (patch_coords[None] - patch_coords[:, None]).numpy())
         # avg_diff.shape = (num_patches, num_patches)
         averaged_neighbour_dist = ((avg_diff).mean(axis=0)**2).sum(axis=-1)
         # averaged_neighbour_dist.shape = (num_patches)
         # remove imbalanced neighbours
-        mask = self.max_imbalance_dist**2 < averaged_neighbour_dist
+
+        # mask = self.max_imbalance_dist**2 < averaged_neighbour_dist
+        mask = averaged_neighbour_dist != 0.
 
         # connection_matrix.shape = (num_patches, num_patches)
         # connection_matrix[i,j] == 1 iff patch i and j are closer than max_dist

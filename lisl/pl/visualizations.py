@@ -39,12 +39,12 @@ def vis_anchor_embedding(embedding, patch_coords, img, grad=None, output_file=No
     if grad is not None:
         plt.quiver(patch_coords[:, 0],
                    patch_coords[:, 1],
-                   grad[:, 0],
-                   grad[:, 1],
+                   (10 * grad[:, 0]) / grad[:, :2].max(),
+                   (10 * grad[:, 1]) / grad[:, :2].max(),
                    angles='xy',
                    scale_units='xy',
-                   scale=None,
-                   color='r')
+                   scale=1.,
+                   color='#ff8fa0')
 
     plt.axis('off')
 

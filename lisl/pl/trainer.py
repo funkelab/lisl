@@ -40,7 +40,7 @@ from lisl.pl.utils import (adapted_rand, vis,
 from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
 from lisl.pl.evaluation import compute_3class_segmentation
-from lisl.pl.loss import AnchorPlusLoss
+from lisl.pl.loss import AnchorLoss
 # from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
 from torch.optim.lr_scheduler import MultiStepLR
@@ -59,7 +59,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                        stride=2,
                        initial_lr=1e-4,
                        regularization=1e-4,
-                       anchor_radius=20,
+                       temperature=10,
+                       temperature_decay=0.99,
                        pretrained_model=False,
                        resnet_size=18,
                        val_patch_inference_steps=None,
@@ -81,7 +82,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.initial_lr = initial_lr
         self.lr_milestones = list(int(_) for _ in lr_milestones)
         self.regularization = regularization
-        self.anchor_radius = anchor_radius
+        self.temperature = temperature
+        self.temperature_decay = temperature_decay
         self.pretrained_model = pretrained_model
         self.resnet_size = resnet_size
 
@@ -120,7 +122,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--loss_name', type=str, default="CPC")
         parser.add_argument('--unet_type', type=str, default="gp")
         parser.add_argument('--lr_milestones', nargs='*', default=[200])
-        parser.add_argument('--anchor_radius', type=float, default=10)
+        parser.add_argument('--temperature', type=float, default=10)
+        parser.add_argument('--temperature_decay', type=float, default=0.99)
         parser.add_argument('--pretrained_model', action='store_true')
         parser.add_argument('--val_patch_inference_steps', type=int, default=None)
         parser.add_argument('--resnet_size', type=int, default=18)
@@ -171,14 +174,14 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                     resnet_size=self.resnet_size)
 
     def build_loss(self, ):
-        self.anchor_loss = AnchorPlusLoss(self.anchor_radius)
+        self.anchor_loss = AnchorLoss(self.temperature)
 
     def training_step(self, batch, batch_nb):
         x, patches, abs_coords, patch_matches, mask = batch
 
         embedding = self.forward_patches(patches, flip_augmentation=True)
 
-        if self.global_step % 1000 == 0:
+        if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
 
             # save model
             model_directory = os.path.abspath(os.path.join(self.logger.log_dir,
@@ -222,25 +225,54 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
                 handle = embedding.register_hook(log_hook)
 
+
+            # max_x = int(abs_coords[..., 0].max().cpu().numpy())
+            # max_y = int(abs_coords[..., 1].max().cpu().numpy())
+
+            # origin = abs_coords.shape[1] // 2
+            # cx, cy = abs_coords[0, origin]
+
+            # for center_idx in [origin, origin+10, origin+20]:
+            #     ds = 10
+            #     heatmap = np.empty((100//ds, 100//ds))
+            #     tmpemb = embedding[:1].detach()
+            #     with torch.no_grad():
+            #         stride = 1
+            #         for i, x in enumerate(np.arange(-5, 5, 0.1*ds)):
+            #             for j, y in enumerate(np.arange(-5, 5, 0.1*ds)):
+            #                 tmpemb[0, center_idx, 0] = x - cx
+            #                 tmpemb[0, center_idx, 1] = y - cy
+            #                 heatmap[i, j] = self.anchor_loss(tmpemb, abs_coords[:1], patch_matches[:1]).detach().cpu().numpy()
+            #                 if i ==0 and j==0:
+            #                     heatmap[:] = heatmap[i, j]
+            #                 print(tmpemb[0, center_idx], heatmap[i, j], x, y, i, j)
+
+            #             imsave(f"{img_directory}/heatmap_{self.global_step}_{center_idx}.png", heatmap)
+
+
+
         # detach masked  boundary patches
         embedding = ((mask[..., None]).float() * embedding.detach()) + ((~mask[..., None]).float() * embedding)
         anchor_loss = self.anchor_loss(embedding, abs_coords, patch_matches)
 
+        if self.global_step < 1000:
+            self.anchor_loss.multiply_temperature(1.003)
+        else:
+            self.anchor_loss.multiply_temperature(self.temperature_decay)
+
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        reg_loss = self.regularization * embedding.norm(2, dim=-1).sum()
-        self.log('reg_loss', reg_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        loss = anchor_loss + reg_loss
+        self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True,  on_epoch=True, prog_bar=True, logger=True)
+
+        if self.regularization > 0.:
+            reg_loss = self.regularization * embedding.norm(2, dim=-1).sum()
+            loss = anchor_loss + reg_loss
+            self.log('reg_loss', reg_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        else:
+            loss = anchor_loss
 
         # loss, y, y_hat = self.loss_anchor(y, embedding)
         tensorboard_logs = {'train_loss': loss.detach()}
         tensorboard_logs['iteration'] = self.global_step
-
-        if self.global_step == 1000:
-            self.anchor_loss.multiply_anchor_radius(4.)
-        if self.global_step == 2000:
-            self.anchor_loss.multiply_anchor_radius(1/16.)
-
-        self.log('anchor_radius', self.anchor_loss.anchor_radius, on_step=True, on_epoch=True, logger=True)
         return {'loss': loss, 'log': tensorboard_logs}
 
     def validation_step(self, batch, batch_nb):
@@ -255,9 +287,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             else:
                 embedding = self.forward_patches(patches, flip_augmentation=True)
 
-            print("Warning: skipping validation loss because of limited memory")
-            loss = torch.Tensor([0.])
-            # loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+            loss = self.anchor_loss(embedding, abs_coords, patch_matches)
             
             self.log('val_loss', loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
 

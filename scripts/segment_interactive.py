@@ -238,7 +238,8 @@ if __name__ == "__main__":
     coords = np.meshgrid(cx, cy, copy=True)
     coords = np.stack(coords, axis=-1)
 
-    embedding_transp += coords
+    print(embedding_transp.shape)
+    embedding_transp[..., :2] += coords
     embedding_transp = embedding_transp.reshape((-1, channels))
 
     mst = mlp.emst(embedding_transp)["output"]
