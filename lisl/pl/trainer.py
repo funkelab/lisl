@@ -132,14 +132,13 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     def forward(self, x):
         return self.model(x)
 
-    def forward_patches(self, x, flip_augmentation=False):
+    def forward_patches(self, x, abs_coords=None, img=None, augmentation='nothing', vis=False):
         # expects input in the shape of
         # x.shape = 
         # (batch, patch_size, channels, patch_width, patch_height)
         b, p, c, pw, ph = x.shape
 
-        if flip_augmentation:
-
+        if augmentation=='flip':
             # apply flips and transpose to imput patches
             inp = x.view(-1, c, pw, ph)
             inp_tp = inp.transpose(-2, -1).detach()
@@ -160,7 +159,107 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             out_tp_flip = out_tp_flip[..., shuffle_index]
 
             # average embeddings
+
+            # if vis:
+            #     for bb in range(b):
+            #         embedding = [{"embedding": out.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"w"},
+            #                      {"embedding": out_tp.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"r"},
+            #                      {"embedding": out_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"g"},
+            #                      {"embedding": out_tp_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"b"}]
+            #         vis_anchor_embedding(embedding,
+            #             abs_coords[bb].detach().cpu().numpy(),
+            #             img[bb].detach().cpu().numpy(),
+            #             grad=None,
+            #             output_file=[f"{augmentation}_{self.global_step}_{bb}.jpg"])
+
+
             out = (out + out_tp + out_flip + out_tp_flip) / 4.
+        elif augmentation=='rotation':
+
+            with torch.no_grad():
+                inp_r0 = x.view(-1, c, pw, ph)
+                inp_r1 = torch.rot90(inp_r0, 1, [-2, -1]).detach()
+                inp_r2 = torch.rot90(inp_r0, 2, [-2, -1]).detach()
+                inp_r3 = torch.rot90(inp_r0, 3, [-2, -1]).detach()
+
+            # forward through model
+            out_r0 = self.model(inp_r0)
+            out_r1 = self.model(inp_r1)
+            out_r2 = self.model(inp_r2)
+            out_r3 = self.model(inp_r3)
+
+            # rotate output embeddings
+            shuffle_index = [1, 0] + [_ for _ in range(2, out_r0.shape[-1])]
+            out_r1 = out_r1[..., shuffle_index]
+            out_r1[..., 1] *= -1.
+            out_r2[..., :2] *= -1.
+            out_r3 = out_r3[..., shuffle_index]
+            out_r3[..., 0] *= -1.
+
+            # if vis:
+            #     for bb in range(b):
+            #         embedding = [{"embedding": out_r0.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"w"},
+            #                      {"embedding": out_r1.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"r"},
+            #                      {"embedding": out_r2.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"g"},
+            #                      {"embedding": out_r3.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"b"}]
+            #         vis_anchor_embedding(embedding,
+            #             abs_coords[bb].detach().cpu().numpy(),
+            #             img[bb].detach().cpu().numpy(),
+            #             grad=None,
+            #             output_file=[f"{augmentation}_{self.global_step}_{bb}.jpg"])
+            out = (out_r0 + out_r1 + out_r2 + out_r3) / 4.
+
+        elif augmentation=='both':
+
+            with torch.no_grad():
+                inp_r0 = x.view(-1, c, pw, ph)
+                inp_tp = inp_r0.transpose(-2, -1).detach()
+                inp_flip = torch.flip(inp_r0, [-2, -1]).detach()
+                inp_tp_flip = torch.flip(inp_tp, [-2, -1]).detach()
+                inp_r1 = torch.rot90(inp_r0, 1, [-2, -1]).detach()
+                inp_r2 = torch.rot90(inp_r0, 2, [-2, -1]).detach()
+                inp_r3 = torch.rot90(inp_r0, 3, [-2, -1]).detach()
+
+            # forward through model
+            out_r0 = self.model(inp_r0)
+            out_r1 = self.model(inp_r1)
+            out_r2 = self.model(inp_r2)
+            out_r3 = self.model(inp_r3)
+            out_tp = self.model(inp_tp)
+            out_flip = self.model(inp_flip)
+            out_tp_flip = self.model(inp_tp_flip)
+
+
+            # rotate output embeddings
+            shuffle_index = [1, 0] + [_ for _ in range(2, out_r0.shape[-1])]
+            out_r1 = out_r1[..., shuffle_index]
+            out_r1[..., 1] *= -1.
+            out_r2[..., :2] *= -1.
+            out_r3 = out_r3[..., shuffle_index]
+            out_r3[..., 0] *= -1.
+
+            out_tp = out_tp[..., shuffle_index]
+            out_flip[..., :2] *= -1.
+            out_tp_flip[..., :2] *= -1.
+            out_tp_flip = out_tp_flip[..., shuffle_index]
+
+            # if vis:
+            #     for bb in range(b):
+            #         embedding = [{"embedding": out_r0.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"w"},
+            #                      {"embedding": out_r1.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"r"},
+            #                      {"embedding": out_r2.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"g"},
+            #                      {"embedding": out_r3.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"b"},
+            #                      {"embedding": out_tp.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"c"},
+            #                      {"embedding": out_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"y"},
+            #                      {"embedding": out_tp_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"m"}]
+            #         vis_anchor_embedding(embedding,
+            #             abs_coords[bb].detach().cpu().numpy(),
+            #             img[bb].detach().cpu().numpy(),
+            #             grad=None,
+            #             output_file=[f"{augmentation}_{self.global_step}_{bb}.jpg"])
+
+            # average embeddings
+            out = (2 * out_r0 + out_r1 + out_r2 + out_r3 + out_tp + out_flip + out_tp_flip) / 8. 
         else:
             out = self.model(x.view(-1, c, pw, ph))
 
@@ -179,7 +278,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     def training_step(self, batch, batch_nb):
         x, patches, abs_coords, patch_matches, mask = batch
 
-        embedding = self.forward_patches(patches, flip_augmentation=True)
+        embedding = self.forward_patches(patches, abs_coords, x, vis=(self.global_step % 100 == 0))
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
 
@@ -255,10 +354,10 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         embedding = ((mask[..., None]).float() * embedding.detach()) + ((~mask[..., None]).float() * embedding)
         anchor_loss = self.anchor_loss(embedding, abs_coords, patch_matches)
 
-        if self.global_step < 1000:
-            self.anchor_loss.multiply_temperature(1.003)
-        else:
-            self.anchor_loss.multiply_temperature(self.temperature_decay)
+        # if self.global_step < 1000:
+        #     self.anchor_loss.multiply_temperature(1.003)
+        # else:
+        #     self.anchor_loss.multiply_temperature(self.temperature_decay)
 
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True,  on_epoch=True, prog_bar=True, logger=True)
@@ -281,11 +380,11 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         with torch.no_grad():
 
             if self.val_patch_inference_steps is not None:
-                embedding = self.sliced_cpu_forward_patches(patches, flip_augmentation=True)
+                embedding = self.sliced_cpu_forward_patches(patches)
                 abs_coords = abs_coords.cpu()
                 patch_matches = patch_matches.cpu()
             else:
-                embedding = self.forward_patches(patches, flip_augmentation=True)
+                embedding = self.forward_patches(patches)
 
             loss = self.anchor_loss(embedding, abs_coords, patch_matches)
             
@@ -298,7 +397,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
         return [optimizer], [scheduler]
 
-    def sliced_cpu_forward_patches(self, patches, flip_augmentation=True):
+    def sliced_cpu_forward_patches(self, patches):
         vpis = self.val_patch_inference_steps
         # apply forward patch on small slices to  
         # reduce memory footprint
@@ -307,8 +406,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         for b in range(patches.shape[0]):
             e_slice = []
             for c in range(0, patches.shape[1], vpis):
-                e_slice.append(self.forward_patches(patches[b:b+1, c:c+vpis],
-                                                    flip_augmentation=flip_augmentation).cpu())
+                e_slice.append(self.forward_patches(patches[b:b+1, c:c+vpis]).cpu())
             e_slice = torch.cat(e_slice, dim=1)
             embedding.append(e_slice)
         embedding = torch.cat(embedding, dim=0)

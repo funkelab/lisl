@@ -21,10 +21,13 @@ from lisl.pl.utils import Patchify
 from torch.nn import functional as F
 from sklearn.cluster import MeanShift
 from lisl.pl.visualizations import vis_anchor_embedding
+import skimage
+from embeddingutils.affinities import embedding_to_affinities
+from affogato.segmentation import compute_mws_clustering, compute_mws_segmentation
 
 from PIL import Image
 import matplotlib
-
+from skimage.measure import label as label_cont
 
 def compute_3class_segmentation(inner, background):
     seeds = measure.label(inner, background=0)
@@ -238,6 +241,11 @@ class SupervisedLinearSegmentationValidation(Callback, BuildFromArgparse):
                                      predicted_labels=predicted_seg[-1],
                                      embeddings=embeddings)
 
+def n(a):
+    out = a - a.min()
+    out /= out.max() + 1e-8 
+    return out
+
 class AnchorSegmentationValidation(Callback):
 
     def __init__(self, run_ms_segmentation=True, device='cpu'):
@@ -248,22 +256,21 @@ class AnchorSegmentationValidation(Callback):
 
     def on_validation_epoch_start(self, trainer, pl_module):
         """Called when the validation loop begins."""
-        self.seg_scores = []
+        self.seg_scores = {}
 
     def on_validation_epoch_end(self, trainer, pl_module):
         """Called when the validation loop ends."""
-        print("seg_score_best_bandwidth", np.mean(self.seg_scores))
-        pl_module.log("seg_score_best_bandwidth", np.mean(self.seg_scores))
+        for k in self.seg_scores:
+            print("seg_score_best_bandwidth", np.mean(self.seg_scores[k]))
+            pl_module.log(f"{k}_seg_score", np.mean(self.seg_scores[k]))
 
-
-    def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
+    def predict_embedding(self, batch, pl_module, patch_size):
 
         edim = pl_module.out_channels
 
         with torch.no_grad():
             x, patches, abs_coords, patch_matches, mask, y = batch
 
-            patch_size = trainer.datamodule.patch_size
             lp = (patch_size // 2)
             rp = ((patch_size - 1) // 2)
 
@@ -276,13 +283,14 @@ class AnchorSegmentationValidation(Callback):
 
             embedding_relative = torch.empty((x.shape[0], edim) + x.shape[-2:])
             embedding = torch.empty((x.shape[0], edim) + x.shape[-2:])
+
             for i in range(x.shape[-2]):
                 patches = torch.stack(list(pf(x0) for x0 in padded[:, :, i:i+(patch_size)]))
                 # patches.shape = (batch_size, num_patches, 2, patch_width, patch_height)
                 b, p, c, pw, ph = patches.shape
 
                 patches = patches.cuda()
-                pred_i = pl_module.forward_patches(patches, flip_augmentation=True)
+                pred_i = pl_module.forward_patches(patches)
                 pred_i = pred_i.to(embedding.device)
 
                 embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
@@ -290,7 +298,9 @@ class AnchorSegmentationValidation(Callback):
                 embedding[:, 0, i] += torch.arange(x.shape[-1])[None]
                 embedding[:, 1, i] += i
 
-        # save model with evaluation number
+        return embedding, embedding_relative
+
+    def create_eval_dir(self, pl_module):
         eval_directory = os.path.abspath(os.path.join(pl_module.logger.log_dir,
                                                       os.pardir,
                                                       os.pardir,
@@ -298,26 +308,25 @@ class AnchorSegmentationValidation(Callback):
                                                       f"{pl_module.global_step:08d}"))
 
         os.makedirs(eval_directory, exist_ok=True)
-        def n(a):
-            out = a - a.min()
-            out /= out.max() + 1e-8 
-            return out
+        return eval_directory
 
+
+    def visualize_embeddings(self, embedding, x, filename):
         for b, e in enumerate(embedding.cpu().numpy()):
             for c in range(0, embedding.shape[1], 2):
-                imsave(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}_{c}.jpg", np.stack((n(e[c]), n(x[b, 0].cpu().numpy()), n(e[c+1])), axis=-1))
+                imsave(f"{filename}_{b}_{c}.jpg", 
+                       np.stack((n(e[c]), n(x[b, 0].cpu().numpy()), n(e[c+1])), axis=-1))
 
-        embedding_relative = embedding_relative.cpu().numpy()
+    def visualize_segmentation(self, seg, x, filename):
+        colseg = label2color(seg).transpose(1, 2, 0)
+        img = np.repeat(x[0, ..., None].cpu().numpy(), 3, axis=-1)
+        blend = (colseg[..., :3] / 2)  + img
+        imsave(filename, blend)
+
+
+    def visualize_embedding_vectors(self, embedding_relative, x, filename, downsample_factor=8):
+
         for b, e in enumerate(embedding_relative):
-            for c in range(0, embedding.shape[1], 2):
-                imsave(f"{eval_directory}/rel_embedding_{batch_idx}_{pl_module.local_rank}_{b}_{c}.jpg", np.stack((n(e[c]), n(x[b, 0].cpu().numpy()), n(e[c+1])), axis=-1))
-
-        for b, e in enumerate(embedding_relative):
-
-            z_array = zarr.open(f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}_{b}.zarr", mode="w")
-            z_array.create_dataset(f"embedding", data=e, compression='gzip')
-            z_array.create_dataset(f"embedding_abs", data=embedding.cpu().numpy()[b], compression='gzip')
-            z_array.create_dataset(f"raw", data=x[b].cpu().numpy(), compression='gzip')
 
             cx = np.arange(e.shape[-2], dtype=np.float32)
             cy = np.arange(e.shape[-1], dtype=np.float32)
@@ -325,8 +334,8 @@ class AnchorSegmentationValidation(Callback):
             coords = np.stack(coords, axis=-1)
             
             e_transposed = np.transpose(e, (1,2,0))
-            # downsample_factor
-            dsf = 8
+
+            dsf = downsample_factor
             spatial_dims = coords.shape[-1]
             patch_coords = coords[dsf//2::dsf, dsf//2::dsf].reshape(-1, spatial_dims)
             patch_embedding = e_transposed[dsf//2::dsf, dsf//2::dsf, :spatial_dims].reshape(-1, spatial_dims)
@@ -335,31 +344,224 @@ class AnchorSegmentationValidation(Callback):
                                  patch_coords,
                                  n(x[b].cpu().numpy()),
                                  grad=None,
-                                 output_file=[f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}_{b}.jpg",
-                                              f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}_{b}.pdf"])
+                                 output_file=f"{filename}_{b}.jpg")
 
-        if self.run_ms_segmentation:
-            b, c, w, h = embedding.shape
-            resh_emb = embedding.permute(0, 2, 3, 1).view(b, w*h, c)
 
-            bandwidths = [1, 2, 4] + list(np.arange(5., 30., 10.))
-            seg_score_table = np.zeros((len(bandwidths), b))
-            for i, bandwidth in enumerate(bandwidths):
-                for j in range(b):
-                    X = resh_emb[j].contiguous().numpy()
-                    ms = MeanShift(bandwidth=bandwidth)
-                    ms_seg = ms.fit(X[np.random.rand(len(X)) < 0.02])
-                    ms_seg = ms.predict(X)
-                    ms_seg = ms_seg.reshape(w, h)
-                    colseg = label2color(ms_seg).transpose(1, 2, 0)
+    def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
 
-                    seg_score_table[i, j] = seg_metric(ms_seg, y[0].numpy())
+        x, patches, abs_coords, patch_matches, mask, y = batch
 
-                    if i == 0 or seg_score_table[i, j] >= seg_score_table[:i, j].max():
-                        img = np.repeat(x[j, 0, ..., None].cpu().numpy(), 3, axis=-1)
-                        blend = (colseg[..., :3] / 2)  + img
-                        imsave(f'{eval_directory}/msseg_{batch_idx}_{pl_module.local_rank}_{j}.jpg', blend)
+        eval_directory = self.create_eval_dir(pl_module)
+        embedding, embedding_relative = self.predict_embedding(batch, pl_module, trainer.datamodule.patch_size)
 
-            print("seg_score", seg_score_table)
+        self.visualize_embeddings(embedding, x, f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}")
+        self.visualize_embeddings(embedding_relative, x,
+            f"{eval_directory}/embedding_relative_{batch_idx}_{pl_module.local_rank}")
 
-            self.seg_scores.append(seg_score_table.max(axis=0).mean())
+        filename = f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}"
+        self.visualize_embedding_vectors(embedding_relative, x, filename)
+
+        eval_data_file = f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}.zarr"
+
+        # write embedding and raw data to file
+        z_array = zarr.open(eval_data_file, mode="w")
+        for b, e in enumerate(embedding_relative.cpu().numpy()):
+            z_array.create_dataset(f"{b}/embedding", data=e, compression='gzip')
+            z_array.create_dataset(f"{b}/embedding_abs", data=embedding.cpu().numpy()[b], compression='gzip')
+            z_array.create_dataset(f"{b}/gt_segmentation", data=y.cpu().numpy()[b, None], compression='gzip')
+            z_array.create_dataset(f"{b}/raw", data=x[b].cpu().numpy(), compression='gzip')
+            threshold = skimage.filters.threshold_li(image=x[b].cpu().numpy())
+            z_array.create_dataset(f"{b}/threshold_li", data=255*(x[b].cpu().numpy() > threshold).astype(dtype=np.uint8), compression='gzip')
+
+
+        # Compute Meanshift Segmentation
+        bandwidths = [1, 2, 4] + list(np.arange(5., 30., 10.))
+        seg_score_table = np.zeros((len(bandwidths), len(embedding)))
+
+
+        for i, bandwidth in enumerate(bandwidths):
+            segment_with_meanshift = AnchorMeanshift(bandwidth)
+            ms_segmentation = segment_with_meanshift(embedding)
+
+            for b, seg in enumerate(ms_segmentation):
+
+                seg_score_table[i, b] = seg_metric(seg, y[0].numpy())
+
+                z_array.create_dataset(f"{b}/meanshift_seg_{bandwidth}", data=seg[None], compression='gzip')
+
+                self.visualize_segmentation(seg, x[b], 
+                    f'{eval_directory}/meanshift_seg_{batch_idx}_{pl_module.local_rank}_{b}_{bandwidth}.jpg')
+
+        if "meanshift" not in self.seg_scores:
+            self.seg_scores["meanshift"] = []
+        self.seg_scores["meanshift"].append(seg_score_table.max(axis=0).mean())
+        print("meanshift table ", seg_score_table)
+
+        # Compute MWS Segmentation
+
+        # compute affinities
+
+        att_c = 2
+        offsets = np.array([[-1, 0], [0, -1],
+                            [-9, 0], [0, -9],
+                            [-9, -9], [9, -9],
+                            [-9, -4], [-4, -9], [4, -9], [9, -4],
+                            [-27, 0], [0, -27]], int)
+
+        temperatures = [1., 10., 100.]
+        seg_score_table = np.zeros((len(temperatures), len(embedding)))
+        for i, temperature in enumerate(temperatures):
+            def affinity_measure(x, y, dim=0):
+                distance = (x - y).norm(2, dim=dim)
+                return (-distance.pow(2) / temperature).exp()
+
+            for b, emb in enumerate(embedding):
+                affinities = embedding_to_affinities(emb,
+                                                     offsets=offsets,
+                                                     affinity_measure=affinity_measure)
+                z_array.create_dataset(f"{b}/affinities_{temperature}",
+                                       data=affinities.cpu().numpy(),
+                                       compression='gzip', overwrite=True)
+
+                foreground_mask = (np.array(z_array[f"{b}/threshold_li"]) > 0)[0]
+
+                # compute affinityies
+                affinities[:, :att_c] *= -1
+                affinities[:, :att_c] += 1
+
+                seg = compute_mws_segmentation(affinities,
+                                   offsets,
+                                   att_c,
+                                   strides=None,
+                                   mask=foreground_mask).astype(np.int32)
+
+                seg_score_table[i, b] = seg_metric(seg, y[0].numpy())
+
+                self.visualize_segmentation(seg, x[b], 
+                    f'{eval_directory}/mws_seg_{batch_idx}_{pl_module.local_rank}_{b}_{temperature}.jpg')
+
+                z_array.create_dataset(f"{b}/mws_seg_{temperature}",
+                    data=label_cont(seg)[None].astype(np.uint32),
+                    compression='gzip', overwrite=True)
+            
+        if "MutexWS" not in self.seg_scores:
+            self.seg_scores["MutexWS"] = []
+        print("mws table ", seg_score_table)
+        self.seg_scores["MutexWS"].append(seg_score_table.max(axis=0).mean())        
+
+class AnchorMeanshift():
+    def __init__(self, bandwidth, reduction_probability = 0.05):
+        self.ms = MeanShift(bandwidth=bandwidth)
+        self.reduction_probability = reduction_probability
+
+    def __call__(self, embedding):
+        b, c, w, h = embedding.shape
+        resh_emb = embedding.permute(0, 2, 3, 1).view(b, w*h, c)
+
+        segmentation = []
+        for j in range(b):
+            X = resh_emb[j].contiguous().numpy()
+
+            if self.reduction_probability < 1.:
+                X_reduced = X[np.random.rand(len(X)) < self.reduction_probability]
+                ms_seg = self.ms.fit(X_reduced)
+            else:
+                ms_seg = self.ms.fit(X)
+
+            ms_seg = self.ms.predict(X)
+            ms_seg = ms_seg.reshape(w, h)
+            segmentation.append(ms_seg)
+
+        return np.stack(segmentation)
+
+
+if __name__ == '__main__':
+    
+
+    for i in range(13):
+
+        # read data
+        eval_file = f'/nrs/funke/wolfs2/lisl/experiments/dsb_anchor_31/01_train/setup_t00{i:02}/evaluation/00001004/embedding_2_0_0.zarr'
+        gt_file = '/nrs/funke/wolfs2/lisl/experiments/dev_eval/ref/evaluation/00000000/embedding_2_0_0.zarr'
+        try :
+            z_array = zarr.open(eval_file, mode="r+")
+            emb = np.array(z_array["embedding_abs"])
+            
+
+            z_array_gt = zarr.open(gt_file, mode="r+")
+            fg = (np.array(z_array_gt["threshold_li"]) > 0)[0]
+
+
+            # compute affinityies
+            att_c = 2
+            offsets = np.array([[-1, 0], [0, -1],
+                                            [-9, 0], [0, -9],
+                                            [-9, -9], [9, -9],
+                                            [-9, -4], [-4, -9], [4, -9], [9, -4],
+                                            [-27, 0], [0, -27]], int)
+
+
+            att_c = 2
+            affinities[:, :att_c] *= -1
+            affinities[:, :att_c] += 1
+
+            seg = compute_mws_segmentation(affinities,
+                               offsets,
+                               att_c,
+                               strides=None,
+                               mask=fg).astype(np.int32)
+
+            z_array.create_dataset(f"seg", data=label_cont(seg)[None].astype(np.uint32), compression='gzip', overwrite=True)
+            print("worked", eval_file)
+
+        except:
+            print("aaa", eval_file)
+
+    # emb_shape = embedding.shape
+    # img_shape = embedding.shape[-len(offsets[0]):]
+    # n_img_dims = len(img_shape)
+
+    # if repulsive_strides is None:
+    #     repulsive_strides = (1,) * (n_img_dims - 2) + (8, 8)
+    # repulsive_strides = np.array(repulsive_strides, dtype=int)
+
+    # # actually not needed, huge offsets are fine
+    # # for off in offsets:
+    # #    assert all(abs(o) < s for o, s in zip(off, emb.shape[-len(off):])), \
+    # #        f'offset {off} is to big for image of shape {img_shape}'
+    # with torch.no_grad():
+    #     embedding = embedding.cpu()
+    #     if affinity_measure is not None:
+    #         affinities = embedding_to_affinities(embedding, offsets=offsets, affinity_measure=affinity_measure,
+    #                                              pass_offset=pass_offset)
+    #     else:
+    #         affinities = embedding
+    #     affinities = affinities.contiguous().view((-1, len(offsets)) + emb_shape[-n_img_dims:])
+
+    #     if percentile is not None:
+    #         affinities -= np.percentile(affinities, percentile)
+    #         affinities[:, :ATT_C] *= -1
+    #     else:
+    #         affinities[:, :ATT_C] *= -1
+    #         affinities[:, :ATT_C] += 1
+    #     affinities[:, :ATT_C] *= attraction_factor
+    #     if z_delay != 0:
+    #         affinities[:, (offsets[:, 0] != 0).astype(np.uint8)] += z_delay
+
+    #     result = []
+    #     for aff in affinities:
+    #         seg = compute_mws_segmentation(aff,
+    #                                        offsets,
+    #                                        ATT_C,
+    #                                        strides=repulsive_strides,
+    #                                        mask=mask).astype(np.int32)
+    #         result.append(seg)
+
+    #     result = np.stack(result, axis=-(n_img_dims + 1)).reshape(emb_shape[:-n_img_dims - 1] + emb_shape[-n_img_dims:])
+
+    #     if return_affinities:
+    #         return torch.from_numpy(result), affinities
+    #     else:
+    #         return torch.from_numpy(result)
+
+

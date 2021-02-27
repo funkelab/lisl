@@ -39,7 +39,7 @@ if __name__ == '__main__':
     model = SSLTrainer.from_argparse_args(args)
     datamodule = dmodule.from_argparse_args(args)
     # ssl_test_acc = SupervisedLinearSegmentationValidation.from_argparse_args(args)
-    anchor_val = AnchorSegmentationValidation(run_ms_segmentation=False)
+    anchor_val = AnchorSegmentationValidation(run_ms_segmentation=True)
     # lr_logger = LearningRateLogger()
     timer = Timing()
     model_saver = ModelCheckpoint(save_last=True, save_weights_only=False, period=10)
