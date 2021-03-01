@@ -12,6 +12,7 @@ from lisl.pl.datamodules import MosaicDataModule, SSLDataModule
 from lisl.pl.utils import save_args, import_by_string
 from lisl.pl.evaluation import SupervisedLinearSegmentationValidation, AnchorSegmentationValidation
 from lisl.pl.callbacks import Timing
+from pytorch_lightning.callbacks import LearningRateMonitor
 
 from pytorch_lightning.callbacks import ModelCheckpoint
 from test_tube import HyperOptArgumentParser
@@ -37,18 +38,20 @@ if __name__ == '__main__':
 
     # init module
     model = SSLTrainer.from_argparse_args(args)
+    # model.model.load_state_dict(torch.load(some_file_path))
+
     datamodule = dmodule.from_argparse_args(args)
     # ssl_test_acc = SupervisedLinearSegmentationValidation.from_argparse_args(args)
-    anchor_val = AnchorSegmentationValidation(run_ms_segmentation=True)
-    # lr_logger = LearningRateLogger()
+    anchor_val = AnchorSegmentationValidation(run_segmentation=True)
+    lr_logger = LearningRateMonitor(logging_interval='step')
     timer = Timing()
-    model_saver = ModelCheckpoint(save_last=True, save_weights_only=False, period=10)
+    model_saver = ModelCheckpoint(save_last=True, save_weights_only=False, period=100)
 
     #  init trainer
     trainer = pl.Trainer.from_argparse_args(args)
 
     # trainer.callbacks.append(ssl_test_acc)
     trainer.callbacks.append(anchor_val)
-    # trainer.callbacks.append(lr_logger)
+    trainer.callbacks.append(lr_logger)
     trainer.callbacks.append(timer)
     trainer.fit(model, datamodule)

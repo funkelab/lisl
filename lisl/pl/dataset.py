@@ -487,7 +487,7 @@ class DSBTestAugmentations(Dataset):
     def __init__(self,
                  dataset,
                  scale=1.,
-                 output_shape=(256, 256)):
+                 output_shape=None):
         self.root_dataset = dataset
         self.scale = scale
         self.output_shape = output_shape
@@ -497,8 +497,10 @@ class DSBTestAugmentations(Dataset):
     def test_transforms(self):
         if self._test_transforms is None:
             self._test_transforms = Compose(QuantileNormalize(apply_to=[0]),
-                                            Scale(self.scale),
-                                            CenterCrop(self.output_shape))
+                                            Scale(self.scale))
+            if self.output_shape is not None:
+                self._test_transforms.add(CenterCrop(self.output_shape))
+                
         return self._test_transforms
 
     def __len__(self):
@@ -512,8 +514,6 @@ class DSBTestAugmentations(Dataset):
         return x, y
 
 
-
-
 class PatchedDataset(Dataset):
 
     def __init__(self,
@@ -522,7 +522,6 @@ class PatchedDataset(Dataset):
                  patch_size,
                  patch_overlap,
                  positive_radius,
-                 scale=1.,
                  augment=True,
                  add_negative_samples=False,
                  return_segmentation=True):
@@ -539,7 +538,6 @@ class PatchedDataset(Dataset):
         self.augment = augment
         self.return_segmentation = return_segmentation
         self.output_shape = tuple(int(_) for _ in output_shape)
-        self.scale = scale
         self.positive_radius = positive_radius
 
         self.add_negative_samples = add_negative_samples

@@ -64,6 +64,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                        pretrained_model=False,
                        resnet_size=18,
                        val_patch_inference_steps=None,
+                       val_patch_inference_downsample=None,
                        lr_milestones=(100)):
 
         super().__init__()
@@ -90,6 +91,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
         self.val_train_set_size = [10, 20, 50, 100, 200, 500, 1000]
         self.val_patch_inference_steps = val_patch_inference_steps
+        self.val_patch_inference_downsample = val_patch_inference_downsample
         self.reset_val()
 
         self.distance = distance
@@ -121,11 +123,12 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--regularization', type=float, default=1e-4)
         parser.add_argument('--loss_name', type=str, default="CPC")
         parser.add_argument('--unet_type', type=str, default="gp")
-        parser.add_argument('--lr_milestones', nargs='*', default=[200])
+        parser.add_argument('--lr_milestones', nargs='*', default=[10000, 50000])
         parser.add_argument('--temperature', type=float, default=10)
         parser.add_argument('--temperature_decay', type=float, default=0.99)
         parser.add_argument('--pretrained_model', action='store_true')
         parser.add_argument('--val_patch_inference_steps', type=int, default=None)
+        parser.add_argument('--val_patch_inference_downsample', type=int, default=None)
         parser.add_argument('--resnet_size', type=int, default=18)
         return parser
 
@@ -158,22 +161,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             out_tp_flip[..., :2] *= -1.
             out_tp_flip = out_tp_flip[..., shuffle_index]
 
-            # average embeddings
-
-            # if vis:
-            #     for bb in range(b):
-            #         embedding = [{"embedding": out.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"w"},
-            #                      {"embedding": out_tp.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"r"},
-            #                      {"embedding": out_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"g"},
-            #                      {"embedding": out_tp_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"b"}]
-            #         vis_anchor_embedding(embedding,
-            #             abs_coords[bb].detach().cpu().numpy(),
-            #             img[bb].detach().cpu().numpy(),
-            #             grad=None,
-            #             output_file=[f"{augmentation}_{self.global_step}_{bb}.jpg"])
-
-
             out = (out + out_tp + out_flip + out_tp_flip) / 4.
+
         elif augmentation=='rotation':
 
             with torch.no_grad():
@@ -191,25 +180,14 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             # rotate output embeddings
             shuffle_index = [1, 0] + [_ for _ in range(2, out_r0.shape[-1])]
             out_r1 = out_r1[..., shuffle_index]
-            out_r1[..., 1] *= -1.
+            out_r1[..., 0] *= -1.
             out_r2[..., :2] *= -1.
             out_r3 = out_r3[..., shuffle_index]
-            out_r3[..., 0] *= -1.
+            out_r3[..., 1] *= -1.
 
-            # if vis:
-            #     for bb in range(b):
-            #         embedding = [{"embedding": out_r0.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"w"},
-            #                      {"embedding": out_r1.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"r"},
-            #                      {"embedding": out_r2.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"g"},
-            #                      {"embedding": out_r3.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"b"}]
-            #         vis_anchor_embedding(embedding,
-            #             abs_coords[bb].detach().cpu().numpy(),
-            #             img[bb].detach().cpu().numpy(),
-            #             grad=None,
-            #             output_file=[f"{augmentation}_{self.global_step}_{bb}.jpg"])
             out = (out_r0 + out_r1 + out_r2 + out_r3) / 4.
-
-        elif augmentation=='both':
+            
+        elif augmentation=='rotflip':
 
             with torch.no_grad():
                 inp_r0 = x.view(-1, c, pw, ph)
@@ -233,30 +211,15 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             # rotate output embeddings
             shuffle_index = [1, 0] + [_ for _ in range(2, out_r0.shape[-1])]
             out_r1 = out_r1[..., shuffle_index]
-            out_r1[..., 1] *= -1.
+            out_r1[..., 0] *= -1.
             out_r2[..., :2] *= -1.
             out_r3 = out_r3[..., shuffle_index]
-            out_r3[..., 0] *= -1.
+            out_r3[..., 1] *= -1.
 
             out_tp = out_tp[..., shuffle_index]
             out_flip[..., :2] *= -1.
             out_tp_flip[..., :2] *= -1.
             out_tp_flip = out_tp_flip[..., shuffle_index]
-
-            # if vis:
-            #     for bb in range(b):
-            #         embedding = [{"embedding": out_r0.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"w"},
-            #                      {"embedding": out_r1.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"r"},
-            #                      {"embedding": out_r2.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"g"},
-            #                      {"embedding": out_r3.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"b"},
-            #                      {"embedding": out_tp.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"c"},
-            #                      {"embedding": out_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"y"},
-            #                      {"embedding": out_tp_flip.view(b, p, self.out_channels)[bb].detach().cpu().numpy(), "color":"m"}]
-            #         vis_anchor_embedding(embedding,
-            #             abs_coords[bb].detach().cpu().numpy(),
-            #             img[bb].detach().cpu().numpy(),
-            #             grad=None,
-            #             output_file=[f"{augmentation}_{self.global_step}_{bb}.jpg"])
 
             # average embeddings
             out = (2 * out_r0 + out_r1 + out_r2 + out_r3 + out_tp + out_flip + out_tp_flip) / 8. 
@@ -360,12 +323,12 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         #     self.anchor_loss.multiply_temperature(self.temperature_decay)
 
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True,  on_epoch=True, prog_bar=True, logger=True)
+        self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True, prog_bar=True, logger=True)
 
         if self.regularization > 0.:
             reg_loss = self.regularization * embedding.norm(2, dim=-1).sum()
             loss = anchor_loss + reg_loss
-            self.log('reg_loss', reg_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
+            self.log('reg_loss', reg_loss.detach(), on_step=True, prog_bar=True, logger=True)
         else:
             loss = anchor_loss
 
@@ -375,20 +338,46 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         return {'loss': loss, 'log': tensorboard_logs}
 
     def validation_step(self, batch, batch_nb):
+
+        # set model to validation mode
+        self.model.eval()
         x, patches, abs_coords, patch_matches, mask, y = batch
 
-        with torch.no_grad():
+        import os, psutil
+        process = psutil.Process(os.getpid())
+        from inspect import currentframe, getframeinfo
 
+        with torch.no_grad():
+            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
+            if self.val_patch_inference_downsample is not None:
+                patches = patches[:, ::self.val_patch_inference_downsample]
+                abs_coords = abs_coords[:, ::self.val_patch_inference_downsample]
+                patch_matches = patch_matches[:, ::self.val_patch_inference_downsample,
+                                                 ::self.val_patch_inference_downsample]
+            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
             if self.val_patch_inference_steps is not None:
+                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
+                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
                 embedding = self.sliced_cpu_forward_patches(patches)
+                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
                 abs_coords = abs_coords.cpu()
                 patch_matches = patch_matches.cpu()
+                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
             else:
                 embedding = self.forward_patches(patches)
 
+            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
+
             loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+
+            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
             
             self.log('val_loss', loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
+
+        print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
+
+        # set model back to training mode
+        self.model.train()
 
         return {'val_loss': loss}
 

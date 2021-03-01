@@ -60,4 +60,5 @@ def vis_anchor_embedding(embedding, patch_coords, img, grad=None, output_file=No
     # buf.seek(0)
     plt.cla()
     plt.clf()
+    plt.close()
     # return buf

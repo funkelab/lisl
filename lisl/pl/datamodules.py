@@ -172,7 +172,6 @@ class AnchorDataModule(pl.LightningDataModule):
                                 self.patch_size,
                                 self.patch_overlap,
                                 self.positive_radius,
-                                scale=self.scale,
                                 augment=True,
                                 return_segmentation=False)
 
@@ -182,7 +181,6 @@ class AnchorDataModule(pl.LightningDataModule):
                                 self.patch_size,
                                 self.patch_overlap,
                                 self.positive_radius,
-                                scale=self.scale,
                                 augment=False,
                                 return_segmentation=True)
 
@@ -196,9 +194,9 @@ class AnchorDataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(self.ds_val,
-                          batch_size=self.batch_size,
+                          batch_size=1,
                           shuffle=False,
-                          num_workers=self.loader_workers,
+                          num_workers=1,
                           worker_init_fn=pl.utilities.seed.seed_everything,
                           drop_last=False)
 
@@ -263,7 +261,8 @@ class UsiigaciDataModule(AnchorDataModule):
                                      scale=self.scale,
                                      output_shape=self.shape)
     ds_val = DSBTestAugmentations(ds_val,
-                                  scale=self.scale)
+                                  scale=self.scale,
+                                  output_shape=(512, 512))
 
     return ds_train, ds_val
 

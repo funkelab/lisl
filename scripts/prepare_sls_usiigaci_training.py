@@ -26,7 +26,7 @@ if __name__ == '__main__':
               for anchor_radius in [5]:
 
                 out_channels = 2
-                stride = 11
+                stride = 2
                 patchdilation = 1
                 patch_factor = patchsize//16
 
