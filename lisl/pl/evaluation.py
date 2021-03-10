@@ -377,7 +377,7 @@ class AnchorSegmentationValidation(Callback):
 
         return ms_segmentaiton
 
-    def mws_segmentation(self, embedding, foreground_masks, temperatures, img_dir_and_prefix=None, output_z_array=None):
+    def mws_segmentation(self, embedding, temperatures, foreground_mask=None, img_dir_and_prefix=None, output_z_array=None):
 
         mws_segmentaiton = {}
 
@@ -389,13 +389,12 @@ class AnchorSegmentationValidation(Callback):
                             [-9, -4], [-4, -9], [4, -9], [9, -4],
                             [-27, 0], [0, -27]], int)
 
+        bias_list = [0.]#np.arange(-0.5, 0.5, 0.1)
         
         for i, temperature in enumerate(temperatures):
             def affinity_measure(x, y, dim=0):
                 distance = (x - y).norm(2, dim=dim)
                 return (-distance.pow(2) / temperature).exp()
-
-            mws_segmentaiton[temperature] = []
 
             for b, emb in enumerate(embedding):
                 affinities = embedding_to_affinities(emb,
@@ -412,16 +411,27 @@ class AnchorSegmentationValidation(Callback):
                                            data=affinities.cpu().numpy(),
                                            compression='gzip', overwrite=True)
                 # compute affinityies
-                affinities[:, :att_c] *= -1
-                affinities[:, :att_c] += 1
+                affinities[att_c:] *= -1
+                affinities[att_c:] += 1
 
-                seg = compute_mws_segmentation(affinities,
-                                   offsets,
-                                   att_c,
-                                   strides=None,
-                                   mask=foreground_masks[b]).astype(np.int32)
-                seg = label_cont(seg)
-                mws_segmentaiton[temperature].append(seg)
+                for bias_value in bias_list:
+
+                        bias = np.array([0,] * att_c + [bias_value, ] * (affinities.shape[0] - att_c))[:, None, None]
+                        use_mask = foreground_mask is not None
+                        mask = foreground_mask[b] if use_mask else None
+
+                        seg = compute_mws_segmentation(affinities + bias,
+                                           offsets,
+                                           att_c,
+                                           strides=[2, 2],
+                                           mask=mask).astype(np.int32)
+
+                        seg = label_cont(seg)
+                        key = f"{temperature}_bias{bias_value}_fg{use_mask}"
+                        if key not in mws_segmentaiton:
+                            mws_segmentaiton[key] = []
+
+                        mws_segmentaiton[key].append(seg)
             
 
         return mws_segmentaiton
@@ -455,6 +465,7 @@ class AnchorSegmentationValidation(Callback):
     def visualizalize_segmentation_dict(self, segmentation_dict, x, filename):
         for k in segmentation_dict:
             for b, seg in enumerate(segmentation_dict[k]):
+                print(f'writing {filename}_{b}_{k}.jpg')
                 self.visualize_segmentation(seg, x[b], f'{filename}_{b}_{k}.jpg')
 
     def full_evaluation(self, trainer, pl_module, batch, batch_idx, dataloader_idx, augmentation):
@@ -490,10 +501,10 @@ class AnchorSegmentationValidation(Callback):
             self.write_segmentation_to_zarr(ms_seg, "meanshift", z_array)
             self.visualizalize_segmentation_dict(ms_seg, x, f'{eval_directory}/meanshift_seg_{batch_idx}_{pl_module.local_rank}')
 
-            temperatures = [1., 10., 100.]
+            temperatures = [1., 10., 100., 1000., 10000.]
             foreground_mask = [(np.array(z_array[f"{b}/threshold_li"]) > 0)[0] for b in range(len(embedding))]
 
-            mws_seg = self.mws_segmentation(embedding, foreground_mask, temperatures,
+            mws_seg = self.mws_segmentation(embedding, temperatures, foreground_mask=foreground_mask,
                                             img_dir_and_prefix=(eval_directory, f"{batch_idx}_{pl_module.local_rank}"))
             evaluation_key = f"MWS_{augmentation}"
             seg_score = self.log_SEG_score(mws_seg, y, evaluation_key=f"MWS_{augmentation}")
@@ -533,44 +544,70 @@ class AnchorMeanshift():
 if __name__ == '__main__':
     
 
-    for i in range(13):
+    from EmbedSeg.utils.utils2 import matching_dataset, obtain_AP_one_hot
+    import csv
 
-        # read data
-        eval_file = f'/nrs/funke/wolfs2/lisl/experiments/dsb_anchor_31/01_train/setup_t00{i:02}/evaluation/00001004/embedding_2_0_0.zarr'
-        gt_file = '/nrs/funke/wolfs2/lisl/experiments/dev_eval/ref/evaluation/00000000/embedding_2_0_0.zarr'
-        try :
-            z_array = zarr.open(eval_file, mode="r+")
-            emb = np.array(z_array["embedding_abs"])
-            
+    score_filename = "/nrs/funke/wolfs2/lisl/experiments/dense_run_01/01_train/dsb2_details.csv"
 
-            z_array_gt = zarr.open(gt_file, mode="r+")
-            fg = (np.array(z_array_gt["threshold_li"]) > 0)[0]
+    with open(score_filename, 'w', newline='', buffering=1) as csvfile:
+        csvwriter = csv.writer(csvfile, delimiter=',',
+                                quotechar='|', quoting=csv.QUOTE_MINIMAL)
+
+        for i in [31]:#list(range(34, 38, 1)):
+            for j in range(0, 15, 1):
+                eval_file = f'/nrs/funke/wolfs2/lisl/experiments/dense_run_01/01_train/setup_t{i:04}/evaluation/noaugmentation/00040399/embedding_{j}_0.zarr'
+
+    # score_filename = "/nrs/funke/wolfs2/lisl/experiments/dense_run_01/01_train/usi.csv"
+
+    # with open(score_filename, 'w', newline='', buffering=1) as csvfile:
+    #     csvwriter = csv.writer(csvfile, delimiter=',',
+    #                             quotechar='|', quoting=csv.QUOTE_MINIMAL)
+    #     for i in range(13, 26, 1):
+    #         for j in range(0, 4, 1):
+    #             try:
+    #                 eval_file = f'/nrs/funke/wolfs2/lisl/experiments/dense_run_01/01_train/setup_t{i:04}/evaluation/rotflip/00047999/embedding_{j}_0.zarr'
+
+    # score_filename = "/nrs/funke/wolfs2/lisl/experiments/dense_run_01/01_train/bbbc.csv"
+
+    # with open(score_filename, 'w', newline='', buffering=1) as csvfile:
+    #     csvwriter = csv.writer(csvfile, delimiter=',',
+    #                             quotechar='|', quoting=csv.QUOTE_MINIMAL)
+    #     for i in range(0, 13, 1):
+    #         for j in range(0, 10, 1):
 
 
-            # compute affinityies
-            att_c = 2
-            offsets = np.array([[-1, 0], [0, -1],
-                                            [-9, 0], [0, -9],
-                                            [-9, -9], [9, -9],
-                                            [-9, -4], [-4, -9], [4, -9], [9, -4],
-                                            [-27, 0], [0, -27]], int)
+                # try:
+                #     eval_file = f'/nrs/funke/wolfs2/lisl/experiments/dense_run_01/01_train/setup_t{i:04}/evaluation/rotflip/00025999/embedding_{j}_0.zarr'
+
+                asv = AnchorSegmentationValidation()
+
+                z_array = zarr.open(eval_file, mode="r+")
+                print(list(z_array.keys()))
+                emb = np.array(z_array["0/embedding_abs"])[None]
+                fg = (np.array(z_array["0/threshold_li"]) > 0)
+
+                x = torch.from_numpy(np.array(z_array["0/raw"]))[None]
+
+                seg_results = asv.mws_segmentation(torch.from_numpy(emb), np.logspace(0, 4, base=10., num=25), foreground_mask=fg)#, img_dir_and_prefix=("/groups/funke/home/wolfs2/tmp/mws", "xxx"), output_z_array=None)
+                # gtseg = (np.array(z_array["0/gt_segmentation"]) > 0)
+                folder = f"/groups/funke/home/wolfs2/tmp/dsb_later/{i}/{j}"
+                os.makedirs(folder, exist_ok=True)
+                # asv.visualizalize_segmentation_dict(seg_results, x, f"{folder}/mws_")
+
+                seg_scores = []
+                for k in seg_results:
+                    for jj, seg in enumerate(seg_results[k]):
+                        gt_segmentation = (np.array(z_array[f"{jj}/gt_segmentation"])).astype(np.int64)
+                        # print(k, seg_metric(seg, gt_segmentation[j]))
+                        sc=matching_dataset([gt_segmentation[0]], [seg], thresh=0.5, show_progress = False)
+                        seg_scores.append(sc.accuracy)
+                        print(k, j, jj, sc.accuracy)
+                        csvwriter.writerow([k, i, j, jj, sc.accuracy])
+
+                # csvwriter.writerow([i, j, np.array(seg_scores).max()])
 
 
-            att_c = 2
-            affinities[:, :att_c] *= -1
-            affinities[:, :att_c] += 1
 
-            seg = compute_mws_segmentation(affinities,
-                               offsets,
-                               att_c,
-                               strides=None,
-                               mask=fg).astype(np.int32)
-
-            z_array.create_dataset(f"seg", data=label_cont(seg)[None].astype(np.uint32), compression='gzip', overwrite=True)
-            print("worked", eval_file)
-
-        except:
-            print("aaa", eval_file)
 
     # emb_shape = embedding.shape
     # img_shape = embedding.shape[-len(offsets[0]):]
