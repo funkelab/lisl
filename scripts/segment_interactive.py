@@ -129,8 +129,9 @@ class InteractiveSegmentation:
         volume_shape = raw.shape
 
         print(f"Creating segmentation layer with shape {volume_shape}")
-        self.segmentation = np.arange(np.product(volume_shape),dtype=np.uint32)
-        self.segmentation = self.segmentation.reshape(volume_shape)
+        #self.segmentation = np.arange(np.product(volume_shape),dtype=np.uint32)
+        #self.segmentation = self.segmentation.reshape(volume_shape)
+        self.segmentation = np.zeros(volume_shape, dtype=np.uint32)
         
         self.segmentation_volume = neuroglancer.LocalVolume(
             data=self.segmentation,
@@ -228,7 +229,6 @@ if __name__ == "__main__":
     raw = daisy.open_ds(args.raw_file, args.raw_dataset)
     print("raw is open")
     embedding = daisy.open_ds(args.raw_file, args.emb_dataset)
-    # mst = mlp.emst(embedding)["output"]
     channels = embedding.shape[0]
     
     embedding_transp = np.array(embedding.data).transpose(1,2,0)
