@@ -35,7 +35,8 @@ if __name__ == "__main__":
     checkpoint_interval = eval(config['train']['checkpoint_interval'])
     snapshot_interval = eval(config['train']['snapshot_interval'])
     raw_normalize = eval(config['train']['raw_normalize'])
-    out_dir = '.'.join(config_file.split('.')[:-1])
+    out_dir = eval(config['output']['out_dir'])
+    print(out_dir)
 
     pipeline, request = lisl.train.random_point_pairs_pipeline(
         model, loss, optimizer,

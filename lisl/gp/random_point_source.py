@@ -68,6 +68,7 @@ class RandomPointSource(gp.BatchProvider):
     def __init__(
             self,
             graph_key,
+            dims,
             density=None,
             random_point_generator=None):
         '''A source creating uniformly distributed points.
@@ -77,6 +78,9 @@ class RandomPointSource(gp.BatchProvider):
             graph_key (:class:`GraphKey`):
 
                 The graph key to provide.
+
+            dims (int):
+                dimenstion of output points
 
             density (float, optional):
 
@@ -98,6 +102,8 @@ class RandomPointSource(gp.BatchProvider):
             "Exactly one of 'density' or 'random_point_generator' has to be " \
             "given"
 
+        self.dims = dims
+
         self.graph_key = graph_key
         if density is not None:
             self.random_point_generator = RandomPointGenerator(density=density)
@@ -109,8 +115,8 @@ class RandomPointSource(gp.BatchProvider):
         # provide points in an infinite ROI
         self.graph_spec = gp.GraphSpec(
             roi=gp.Roi(
-                offset=(0, 0, 0),
-                shape=(None, None, None)))
+                offset=(0, ) * self.dims,
+                shape=(None, ) * self.dims))
 
         self.provides(self.graph_key, self.graph_spec)
 
