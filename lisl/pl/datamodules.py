@@ -239,7 +239,8 @@ class DSBDataModule(AnchorDataModule):
                                       scale=self.scale,
                                       output_shape=self.shape)
     dsb_val = DSBTestAugmentations(dsb_val,
-                                   scale=self.scale)
+                                   scale=self.scale,
+                                   output_shape=(256, 256))
 
     return dsb_train, dsb_val
 
@@ -283,7 +284,8 @@ class Bbbc010DataModule(AnchorDataModule):
                                      scale=self.scale,
                                      output_shape=self.shape)
     ds_val = DSBTestAugmentations(ds_val,
-                                  scale=self.scale)
+                                  scale=self.scale,
+                                  output_shape=(256, 256))
 
     return ds_train, ds_val
 

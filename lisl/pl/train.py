@@ -16,6 +16,8 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 
 from pytorch_lightning.callbacks import ModelCheckpoint
 from test_tube import HyperOptArgumentParser
+import wandb
+# from pytorch_lightning.loggers import WandbLogger
 import json
 # pl.seed_everything(123)
 
@@ -30,7 +32,8 @@ if __name__ == '__main__':
 
     pl.utilities.seed.seed_everything(42)
     parser = SSLTrainer.add_model_specific_args(parser)
-    parser = pl.Trainer.add_argparse_args(parser)
+
+    parser = pl.Trainer.add_argparse_args(parser)#, logger=WandbLogger(project='SSLAnchor'))
     parser = dmodule.add_argparse_args(parser)
     parser = dmodule.add_model_specific_args(parser)
 

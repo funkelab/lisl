@@ -62,7 +62,6 @@ class SigmoidAnchorLoss(AnchorLoss):
     def nonlinearity(self, distance):
         return (distance - self.temperature).sigmoid()
 
-
 class AnchorPlusLoss(Module):
     r"""
 

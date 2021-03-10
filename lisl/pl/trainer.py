@@ -41,6 +41,7 @@ from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
 from lisl.pl.evaluation import compute_3class_segmentation
 from lisl.pl.loss import AnchorLoss
+from lisl.pl.loss_supervised import SupervisedInstanceEmbeddingLoss
 # from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
 from torch.optim.lr_scheduler import MultiStepLR
@@ -237,6 +238,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
     def build_loss(self, ):
         self.anchor_loss = AnchorLoss(self.temperature)
+        self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
 
     def training_step(self, batch, batch_nb):
         x, patches, abs_coords, patch_matches, mask = batch
@@ -288,31 +290,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                 handle = embedding.register_hook(log_hook)
 
 
-            # max_x = int(abs_coords[..., 0].max().cpu().numpy())
-            # max_y = int(abs_coords[..., 1].max().cpu().numpy())
-
-            # origin = abs_coords.shape[1] // 2
-            # cx, cy = abs_coords[0, origin]
-
-            # for center_idx in [origin, origin+10, origin+20]:
-            #     ds = 10
-            #     heatmap = np.empty((100//ds, 100//ds))
-            #     tmpemb = embedding[:1].detach()
-            #     with torch.no_grad():
-            #         stride = 1
-            #         for i, x in enumerate(np.arange(-5, 5, 0.1*ds)):
-            #             for j, y in enumerate(np.arange(-5, 5, 0.1*ds)):
-            #                 tmpemb[0, center_idx, 0] = x - cx
-            #                 tmpemb[0, center_idx, 1] = y - cy
-            #                 heatmap[i, j] = self.anchor_loss(tmpemb, abs_coords[:1], patch_matches[:1]).detach().cpu().numpy()
-            #                 if i ==0 and j==0:
-            #                     heatmap[:] = heatmap[i, j]
-            #                 print(tmpemb[0, center_idx], heatmap[i, j], x, y, i, j)
-
-            #             imsave(f"{img_directory}/heatmap_{self.global_step}_{center_idx}.png", heatmap)
-
-
-
         # detach masked  boundary patches
         embedding = ((mask[..., None]).float() * embedding.detach()) + ((~mask[..., None]).float() * embedding)
         anchor_loss = self.anchor_loss(embedding, abs_coords, patch_matches)
@@ -343,38 +320,23 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.model.eval()
         x, patches, abs_coords, patch_matches, mask, y = batch
 
-        import os, psutil
-        process = psutil.Process(os.getpid())
-        from inspect import currentframe, getframeinfo
-
         with torch.no_grad():
-            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
             if self.val_patch_inference_downsample is not None:
                 patches = patches[:, ::self.val_patch_inference_downsample]
                 abs_coords = abs_coords[:, ::self.val_patch_inference_downsample]
                 patch_matches = patch_matches[:, ::self.val_patch_inference_downsample,
-                                                 ::self.val_patch_inference_downsample]
-            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
+                              ::self.val_patch_inference_downsample]
             if self.val_patch_inference_steps is not None:
-                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
-                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
                 embedding = self.sliced_cpu_forward_patches(patches)
-                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
                 abs_coords = abs_coords.cpu()
                 patch_matches = patch_matches.cpu()
-                print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
             else:
                 embedding = self.forward_patches(patches)
 
-            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
-
             loss = self.anchor_loss(embedding, abs_coords, patch_matches)
-
-            print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
-            
-            self.log('val_loss', loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
-
-        print(getframeinfo(currentframe()).filename, getframeinfo(currentframe()).lineno, process.memory_info().rss)
+            self.log('val_anchor_loss', loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
+            cluster_loss = self.validation_loss(embedding + abs_coords, abs_coords, y)
+            self.log('val_clustering_loss', cluster_loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
         # set model back to training mode
         self.model.train()
