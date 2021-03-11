@@ -45,7 +45,7 @@ if __name__ == '__main__':
 
     datamodule = dmodule.from_argparse_args(args)
     # ssl_test_acc = SupervisedLinearSegmentationValidation.from_argparse_args(args)
-    anchor_val = AnchorSegmentationValidation(run_segmentation=True)
+    anchor_val = AnchorSegmentationValidation(run_segmentation=False)
     lr_logger = LearningRateMonitor(logging_interval='step')
     timer = Timing()
     model_saver = ModelCheckpoint(save_last=True, save_weights_only=False, period=100)

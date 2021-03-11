@@ -571,8 +571,8 @@ class PatchedDataset(Dataset):
     def compute_connections_and_coordinates(self, img_shape):
 
         self._current_img_shape = img_shape
-        x = np.arange(img_shape[-2], dtype=np.float32)
-        y = np.arange(img_shape[-1], dtype=np.float32)
+        x = np.arange(img_shape[-1], dtype=np.float32)
+        y = np.arange(img_shape[-2], dtype=np.float32)
 
         coords = np.meshgrid(x, y, copy=True)
         coords = np.stack(coords, axis=0)

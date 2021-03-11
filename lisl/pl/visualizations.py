@@ -13,10 +13,11 @@ from lisl.pl.utils import label2color
 def vis_anchor_embedding(embedding, patch_coords, img, grad=None, output_file=None):
     # patch_coords.shape = (num_patches, 2)
 
-    if img.shape[0] not in [3]:
-      plt.imshow(img[0], cmap='magma', interpolation='nearest')
-    else:
-      plt.imshow(np.transpose(img, (1, 2, 0)), interpolation='nearest')
+    if img is not None:
+      if img.shape[0] not in [3]:
+        plt.imshow(img[0], cmap='magma', interpolation='nearest')
+      else:
+        plt.imshow(np.transpose(img, (2, 1, 0)), interpolation='nearest')
 
     if isinstance(embedding, list):
       for e in embedding:

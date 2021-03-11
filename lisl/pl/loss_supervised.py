@@ -1,3 +1,4 @@
+from visualizations import vis_anchor_embedding
 from torch.nn.modules.module import Module
 import torch
 from torch import Tensor
@@ -41,30 +42,42 @@ class SupervisedInstanceEmbeddingLoss(Module):
 
         return cluster_distances.mean()
 
-    def forward(self, abs_embedding, coordinates, y):
+    def forward(self, abs_embedding, coordinates, y, split_pull_push=False):
         # get labels a coodinates
-        loss = 0
+        pull_loss = 0
+        push_loss = 0
+
         for b in range(len(y)):
-            cx = coordinates[b, :, 0].long()
-            cy = coordinates[b, :, 1].long()
+            cx = coordinates[b, :, 1].long()
+            cy = coordinates[b, :, 0].long()
 
             y_per_patch = y[b, cx, cy]
-
             centroids = []
             dim_channels, dim_samples = 1, 0
+            pull_over_instances = 0
 
             for idx in torch.unique(y_per_patch):
-                if idx == 0:
-                    continue
                 patch_mask = y_per_patch == idx
+                if idx == 0:
+                    # skip background instance
+                    continue
+
                 instance_embedding = abs_embedding[b, patch_mask]
 
                 centroid = instance_embedding.mean(dim=dim_samples,
                                                    keepdim=True)
                 centroids.append(centroid)
-                loss = loss + self.pull_distance(centroid, instance_embedding, dim_channels, dim_samples)
+                pull_over_instances = pull_over_instances + \
+                    self.pull_distance(
+                        centroid, instance_embedding, dim_channels, dim_samples)
+
+            pull_loss = pull_loss + (pull_over_instances / len(centroids))
 
             # add push loss between centroids
-            loss = loss + self.push_distance(torch.cat(centroids, dim=0),
+            push_loss = push_loss + self.push_distance(torch.cat(centroids, dim=0),
                                              dim_channels, dim_samples)
-        return loss
+
+        if split_pull_push:
+            return pull_loss, push_loss
+        else:
+            return pull_loss + push_loss

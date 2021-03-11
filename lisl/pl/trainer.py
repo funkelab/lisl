@@ -100,7 +100,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.embed_scale = 0.1
         self.build_models()
         self.build_loss()
-
         self.ndim = 2
 
     def reset_val(self):
@@ -241,20 +240,15 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
 
     def training_step(self, batch, batch_nb):
+
+        # ensure that model is in training mode
+        self.model.train()
+        
         x, patches, abs_coords, patch_matches, mask = batch
 
         embedding = self.forward_patches(patches, abs_coords, x, vis=(self.global_step % 100 == 0))
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
-
-            # save model
-            model_directory = os.path.abspath(os.path.join(self.logger.log_dir,
-                                                          os.pardir,
-                                                          os.pardir,
-                                                          "model"))
-            model_save_path = os.path.join(model_directory, f"model_{self.global_step}.torch")
-            os.makedirs(model_directory, exist_ok=True)
-            torch.save(self.model.state_dict(), model_save_path)
 
             with torch.no_grad():
                 img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
@@ -334,9 +328,13 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                 embedding = self.forward_patches(patches)
 
             loss = self.anchor_loss(embedding, abs_coords, patch_matches)
-            self.log('val_anchor_loss', loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
-            cluster_loss = self.validation_loss(embedding + abs_coords, abs_coords, y)
-            self.log('val_clustering_loss', cluster_loss.detach(), on_step=True, on_epoch=True, prog_bar=False, logger=True)
+            self.log('val_anchor_loss', loss.detach(), on_epoch=True, prog_bar=False, logger=True)
+            for margin in [1., 5., 10, 20., 40]:
+                self.validation_loss.push_margin = margin
+                pull_loss, push_loss = self.validation_loss(embedding + abs_coords, abs_coords, y, split_pull_push=True)
+                self.log(f'val_clustering_loss_margin_pull_{margin}', pull_loss.detach(), on_epoch=True, prog_bar=False, logger=True)
+                self.log(f'val_clustering_loss_margin_push_{margin}', push_loss.detach(), on_epoch=True, prog_bar=False, logger=True)
+                self.log(f'val_clustering_loss_margin_both_{margin}', (pull_loss+push_loss).detach(), on_epoch=True, prog_bar=False, logger=True)
 
         # set model back to training mode
         self.model.train()

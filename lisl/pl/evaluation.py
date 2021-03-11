@@ -474,13 +474,11 @@ class AnchorSegmentationValidation(Callback):
 
         eval_directory = self.create_eval_dir(pl_module, augmentation)
 
-        trainer.model.eval()
         embedding, embedding_relative = self.predict_embedding(batch,
                                                                pl_module,
                                                                trainer.datamodule.patch_size,
                                                                augmentation)
-        trainer.model.train()
-
+        
         vis_pointer_filename = f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}"
         vis_embedding_filename = f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}"
         vis_relembedding_filename = f"{eval_directory}/embedding_relative_{batch_idx}_{pl_module.local_rank}"

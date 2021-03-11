@@ -314,7 +314,7 @@ class Patchify(object):
         self.overlap_size = self.patch_size - overlap_size
         self.dilation = dilation
 
-    def __call__(self, x):
+    def patchify_2d(self, x):
         x = x.unsqueeze(0)
         b, c, h, w = x.size()
 
@@ -334,6 +334,12 @@ class Patchify(object):
         x = x.squeeze(0)
 
         return x
+
+    def __call__(self, x):
+        if x.dim() == 4:
+            return self.patchify_2d(x)
+        else:
+            raise NotImplementedError("patchify is only implemented for 2d images")
 
 
 class BuildFromArgparse(object):
