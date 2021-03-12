@@ -305,41 +305,89 @@ class AbsolutIntensityAugment(gp.nodes.BatchFilter):
 class Patchify(object):
     """ Adapted from 
     https://github.com/PyTorchLightning/pytorch-lightning-bolts/blob/8a4cf8f61644c28d6df54ccffe3a52d6f5fce5a6/pl_bolts/transforms/self_supervised/ssl_transforms.py#L62
-    This implementation adds a dilation parameter
+    This implementation genaralizes to higher dimensions
     """
-
 
     def __init__(self, patch_size, overlap_size, dilation):
         self.patch_size = patch_size
         self.overlap_size = self.patch_size - overlap_size
         self.dilation = dilation
 
+    def expand_parameters(self, spatial_dims):
+
+        if not isinstance(self.patch_size, (list, tuple)):
+            self.patch_size = (self.patch_size, ) * spatial_dims
+        else:
+            assert spatial_dims == len(self.patch_size)
+        if not isinstance(self.overlap_size, (list, tuple)):
+            self.overlap_size = (self.overlap_size, ) * spatial_dims
+        else:
+            assert spatial_dims == len(self.overlap_size)
+
+    def __call__(self, x):
+        # input shape is expected to be (x, s0...,sn) with s beeing the spatial dimensions
+        spatial_dims = x.dim() - 1
+        self.expand_parameters(spatial_dims)
+
+        if spatial_dims == 2:
+            patched_x = self.patchify_2d(x)
+        elif spatial_dims > 2:
+            patched_x = self.patchify_nd(x, spatial_dims)
+        else:
+            raise NotImplementedError("patchify is only implemented for 2D and 3D images")
+
+        print(patched_x.shape)
+        return patched_x
+
+
     def patchify_2d(self, x):
+        # unsqueeze to add artificial batch dimension
         x = x.unsqueeze(0)
         b, c, h, w = x.size()
 
         # patch up the images
-        # (b, c, h, w) -> (b, c*patch_size, L)
+        # (1, c, h, w) -> (1, c*patch_size, L)
         x = F.unfold(x,
             kernel_size=self.patch_size,
             stride=self.overlap_size,
             dilation=self.dilation)
 
-        # (b, c*patch_size, L) -> (b, nb_patches, width, height)
-        x = x.transpose(2, 1).contiguous().view(b, -1, self.patch_size, self.patch_size)
+        # (1, c*patch_size, L) -> (nb_patches, width, height)
+        x = x.transpose(2, 1).contiguous().view(-1, *self.patch_size)
 
-        # reshape to have (b x patches, c, h, w)
-        x = x.view(-1, c, self.patch_size, self.patch_size)
-
-        x = x.squeeze(0)
+        # reshape to shape (patches, c, h, w)
+        x = x.view(-1, c, *self.patch_size)
 
         return x
 
-    def __call__(self, x):
-        if x.dim() == 4:
-            return self.patchify_2d(x)
-        else:
-            raise NotImplementedError("patchify is only implemented for 2d images")
+
+    def patchify_nd(self, x, spatial_dim):
+        # generalize unfolding
+
+        # unfold all dimensions after the first two (assumed to be batch and channels)
+        unfold_dims = range(1, spatial_dim + 1)
+
+        input_shape = x.shape
+        # unfold the image into patches
+        # e.g. for a 3d input image
+        # x.shape = (c, d, h, w)
+        # ->
+        # unfolded_tensor.shape = (c, d_nb_patches, h_nb_patches, w_nb_patches, d_patch_size, h_patch_size, w_patch_size)
+        unfolded_tensor = x
+        for i, udim in enumerate(unfold_dims):
+            unfolded_tensor = unfolded_tensor.unfold(
+                udim, self.patch_size[i], self.overlap_size[i])
+        
+        # merge all patch number dimensions together
+        # (c, nbp_0..nbp_n, patchsize_0..patchsize_0) -> (c, nb_patches, patchsize_0..patchsize_n)
+        unfolded_tensor = unfolded_tensor.reshape(
+            input_shape[0], -1, *self.patch_size)
+
+        # transpose channels with patches to create a "batch dimension"
+        # (c, nb_patches, patchsize_0..patchsize_n) -> (nb_patches, c, patchsize_0..patchsize_n)
+        unfolded_tensor = unfolded_tensor.transpose(1, 0).contiguous()
+
+        return unfolded_tensor
 
 
 class BuildFromArgparse(object):
