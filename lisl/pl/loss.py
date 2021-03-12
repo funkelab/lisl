@@ -12,6 +12,7 @@ import pylab
 import matplotlib.pyplot as plt
 import time
 from skimage.io import imsave
+import numpy as np
 
 class AnchorLoss(Module):
     r"""
@@ -27,18 +28,21 @@ class AnchorLoss(Module):
         super().__init__()
         self.temperature = temperature
 
+    def distance_fn(self, embedding, abs_coords):
+        e0 = embedding[:, :, None]
+        e1 = embedding[:, None]
+        coord_diff = abs_coords[:, :, None] - abs_coords[:, None]
+        diff = (e0 - e1) + coord_diff
+        return diff.norm(2, dim=-1)
+
     def nonlinearity(self, distance):
         return 1 - (-distance.pow(2) / self.temperature).exp()
 
     def forward(self, embedding, abs_coords, patch_mask) -> Tensor:
-
-        coord_diff = abs_coords[:, :, None] - abs_coords[:, None]
-        e0 = embedding[:, :, None]
-        e1 = embedding[:, None]
-
+      
         # compute all pairwise distances of anchor embeddings
-        diff = (e0 - e1) + coord_diff
-        dist = diff.norm(2, dim=-1)
+        
+        dist = self.distance_fn(embedding, abs_coords)
         # dist.shape = (b, p, p)
 
         nonlinear_dist = self.nonlinearity(dist)
@@ -58,9 +62,40 @@ class LinearAnchorLoss(AnchorLoss):
     def nonlinearity(self, distance):
         return distance
 
+class LinearAnchorLoss(AnchorLoss):
+    def nonlinearity(self, distance):
+        return distance
+
 class SigmoidAnchorLoss(AnchorLoss):
     def nonlinearity(self, distance):
         return (distance - self.temperature).sigmoid()
+
+class SineAnchorLoss(AnchorLoss):
+
+    def __init__(self, temperature, direction_vector_file, distances_file):
+        super().__init__(temperature)
+        dirs = np.loadtxt(direction_vector_file).astype(np.float32)
+        direction_vectors = torch.from_numpy(dirs)
+        dst = np.loadtxt(distances_file).astype(np.float32)
+        distances = torch.from_numpy(dst) * 10
+        self.coord_transform = direction_vectors / distances[:, None].float()
+
+    def distance_fn(self, embedding, abs_coords):
+        # embedding.shape = (b, p, c)
+        # abs_coords.shape = (b, p, 2)
+        assert embedding.shape[-1] <= self.coord_transform.shape[0]
+        z = self.absoute_embedding(embedding, abs_coords)
+        return 1 - (-(z[:, :, None] - z[:, None]).pow(2) / self.temperature).exp()
+
+    def absoute_embedding(self, embedding, abs_coords):
+        ct = self.coord_transform[:embedding.shape[-1]].to(abs_coords.device)
+        transformed_coords = torch.einsum('cs,bps->bpc', ct, abs_coords)
+        abs_embedding = embedding + transformed_coords
+        return torch.sin(abs_embedding)
+
+    def nonlinearity(self, distance):
+        return distance
+
 
 class AnchorPlusLoss(Module):
     r"""

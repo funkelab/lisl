@@ -41,8 +41,8 @@ from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
 from lisl.pl.evaluation import compute_3class_segmentation
 from lisl.pl.loss import AnchorLoss
+from lisl.pl.loss import AnchorLoss, SineAnchorLoss
 from lisl.pl.loss_supervised import SupervisedInstanceEmbeddingLoss
-# from pytorch_lightning.losses.self_supervised_learning import CPCTask
 
 from torch.optim.lr_scheduler import MultiStepLR
 import h5py
@@ -64,6 +64,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                        temperature_decay=0.99,
                        pretrained_model=False,
                        resnet_size=18,
+                       train_time_augmentation="nothing",
                        val_patch_inference_steps=None,
                        val_patch_inference_downsample=None,
                        lr_milestones=(100)):
@@ -88,6 +89,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.temperature_decay = temperature_decay
         self.pretrained_model = pretrained_model
         self.resnet_size = resnet_size
+        self.train_time_augmentation = train_time_augmentation
 
 
         self.val_train_set_size = [10, 20, 50, 100, 200, 500, 1000]
@@ -123,6 +125,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--regularization', type=float, default=1e-4)
         parser.add_argument('--loss_name', type=str, default="CPC")
         parser.add_argument('--unet_type', type=str, default="gp")
+        parser.add_argument('--train_time_augmentation', type=str, default="nothing")
         parser.add_argument('--lr_milestones', nargs='*', default=[10000, 50000])
         parser.add_argument('--temperature', type=float, default=10)
         parser.add_argument('--temperature_decay', type=float, default=0.99)
@@ -236,8 +239,13 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                     resnet_size=self.resnet_size)
 
     def build_loss(self, ):
-        self.anchor_loss = AnchorLoss(self.temperature)
+        # self.anchor_loss = AnchorLoss(self.temperature)
         self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
+        direction_vector_file = "/groups/funke/home/wolfs2/local/src/lisl/misc/direction_vectors.npy"
+        distances_file = "/groups/funke/home/wolfs2/local/src/lisl/misc/distances.npy"
+        self.anchor_loss = SineAnchorLoss(self.temperature,
+                                          direction_vector_file,
+                                          distances_file)
 
     def training_step(self, batch, batch_nb):
 
@@ -246,7 +254,11 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         
         x, patches, abs_coords, patch_matches, mask = batch
 
-        embedding = self.forward_patches(patches, abs_coords, x, vis=(self.global_step % 100 == 0))
+        embedding = self.forward_patches(patches,
+                                         abs_coords,
+                                         x,
+                                         vis=(self.global_step % 100 == 0),
+                                         augmentation=self.train_time_augmentation)
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
 
@@ -288,11 +300,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         embedding = ((mask[..., None]).float() * embedding.detach()) + ((~mask[..., None]).float() * embedding)
         anchor_loss = self.anchor_loss(embedding, abs_coords, patch_matches)
 
-        # if self.global_step < 1000:
-        #     self.anchor_loss.multiply_temperature(1.003)
-        # else:
-        #     self.anchor_loss.multiply_temperature(self.temperature_decay)
-
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True, prog_bar=True, logger=True)
 
@@ -315,11 +322,13 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         x, patches, abs_coords, patch_matches, mask, y = batch
 
         with torch.no_grad():
+
             if self.val_patch_inference_downsample is not None:
                 patches = patches[:, ::self.val_patch_inference_downsample]
                 abs_coords = abs_coords[:, ::self.val_patch_inference_downsample]
                 patch_matches = patch_matches[:, ::self.val_patch_inference_downsample,
-                              ::self.val_patch_inference_downsample]
+                                                 ::self.val_patch_inference_downsample]
+
             if self.val_patch_inference_steps is not None:
                 embedding = self.sliced_cpu_forward_patches(patches)
                 abs_coords = abs_coords.cpu()
