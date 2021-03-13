@@ -53,6 +53,8 @@ class AnchorLoss(Module):
 
         return nonlinear_dist.sum()
 
+    def absoute_embedding(self, embedding, abs_coords):
+        return embedding + abs_coords
 
     def multiply_temperature(self, gamma):
         if self.temperature > 1.:
@@ -77,8 +79,9 @@ class SineAnchorLoss(AnchorLoss):
         dirs = np.loadtxt(direction_vector_file).astype(np.float32)
         direction_vectors = torch.from_numpy(dirs)
         dst = np.loadtxt(distances_file).astype(np.float32)
-        distances = torch.from_numpy(dst) * 10
-        self.coord_transform = direction_vectors / distances[:, None].float()
+        dst = torch.from_numpy(dst)
+        self.periodicity = ((2 * np.pi) / dst)[None, None]
+        self.coord_transform = direction_vectors
 
     def distance_fn(self, embedding, abs_coords):
         # embedding.shape = (b, p, c)
@@ -89,9 +92,11 @@ class SineAnchorLoss(AnchorLoss):
 
     def absoute_embedding(self, embedding, abs_coords):
         ct = self.coord_transform[:embedding.shape[-1]].to(abs_coords.device)
+        w = self.periodicity[..., :embedding.shape[-1]].to(abs_coords.device)
         transformed_coords = torch.einsum('cs,bps->bpc', ct, abs_coords)
         abs_embedding = embedding + transformed_coords
-        return torch.sin(abs_embedding)
+        # return flat toroidal coordinates
+        return torch.cat((torch.sin(w * abs_embedding)/w, torch.cos(w * abs_embedding)/w), dim=-1)
 
     def nonlinearity(self, distance):
         return distance

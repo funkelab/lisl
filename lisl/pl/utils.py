@@ -336,7 +336,7 @@ class Patchify(object):
         return x
 
     def __call__(self, x):
-        if x.dim() == 4:
+        if x.dim() == 3:
             return self.patchify_2d(x)
         else:
             raise NotImplementedError("patchify is only implemented for 2d images")

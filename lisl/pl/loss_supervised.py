@@ -27,7 +27,6 @@ class SupervisedInstanceEmbeddingLoss(Module):
 
     def push_distance(self, centroids, dim_channels, dim_samples):
         assert centroids.dim() == 2
-        print(centroids.shape)
         distance_matrix = self.push_distance_measure(
             centroids.unsqueeze(dim_samples),
             centroids.unsqueeze(dim_samples+1),

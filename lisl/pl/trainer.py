@@ -67,6 +67,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                        train_time_augmentation="nothing",
                        val_patch_inference_steps=None,
                        val_patch_inference_downsample=None,
+                       loss_direction_vector_file="misc/direction_vectors.npy",
+                       loss_distances_file="misc/distances.npy",
                        lr_milestones=(100)):
 
         super().__init__()
@@ -90,7 +92,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.pretrained_model = pretrained_model
         self.resnet_size = resnet_size
         self.train_time_augmentation = train_time_augmentation
-
+        self.loss_direction_vector_file = loss_direction_vector_file
+        self.loss_distances_file = loss_distances_file
 
         self.val_train_set_size = [10, 20, 50, 100, 200, 500, 1000]
         self.val_patch_inference_steps = val_patch_inference_steps
@@ -133,6 +136,9 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--val_patch_inference_steps', type=int, default=None)
         parser.add_argument('--val_patch_inference_downsample', type=int, default=None)
         parser.add_argument('--resnet_size', type=int, default=18)
+        parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
+        parser.add_argument('--loss_distances_file', type=str, default="misc/distances.npy")
+
         return parser
 
     def forward(self, x):
@@ -239,13 +245,11 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                     resnet_size=self.resnet_size)
 
     def build_loss(self, ):
-        # self.anchor_loss = AnchorLoss(self.temperature)
         self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
-        direction_vector_file = "/groups/funke/home/wolfs2/local/src/lisl/misc/direction_vectors.npy"
-        distances_file = "/groups/funke/home/wolfs2/local/src/lisl/misc/distances.npy"
         self.anchor_loss = SineAnchorLoss(self.temperature,
-                                          direction_vector_file,
-                                          distances_file)
+                                          self.loss_direction_vector_file,
+                                          self.loss_distances_file)
+        # self.anchor_loss = AnchorLoss(self.temperature)
 
     def training_step(self, batch, batch_nb):
 
@@ -262,20 +266,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
 
-            with torch.no_grad():
-                img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
-                                                os.pardir,
-                                                os.pardir,
-                                                "img"))
-                os.makedirs(img_directory, exist_ok=True)
-                for b in range(len(embedding)):
-                    for c in range(0, embedding.shape[-1]-1, 2):
-                        vis_anchor_embedding(embedding[b, ..., c:c+2].detach().cpu().numpy(),
-                            abs_coords[b].detach().cpu().numpy(),
-                            x[b].detach().cpu().numpy(),
-                            output_file=[f"{img_directory}/vis_{self.global_step}_{self.local_rank}_{b}.jpg",
-                                         f"{img_directory}/vis_{self.global_step}_{self.local_rank}_{b}.pdf"])
-
             if embedding.requires_grad:
                 def log_hook(grad_input):
                     img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
@@ -289,8 +279,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                 abs_coords[b].detach().cpu().numpy(),
                                 x[b].detach().cpu().numpy(),
                                 grad=-grad_input[b, ..., c:c+2].detach().cpu().numpy(),
-                                output_file=[f"{img_directory}/grad_{self.global_step}_{b}_{c}.jpg",
-                                             f"{img_directory}/grad_{self.global_step}_{b}_{c}.pdf"])
+                                output_file=[f"{img_directory}/grad_{self.global_step}_{b}_{c}.jpg"])
                     handle.remove()
 
                 handle = embedding.register_hook(log_hook)
@@ -340,7 +329,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             self.log('val_anchor_loss', loss.detach(), on_epoch=True, prog_bar=False, logger=True)
             for margin in [1., 5., 10, 20., 40]:
                 self.validation_loss.push_margin = margin
-                pull_loss, push_loss = self.validation_loss(embedding + abs_coords, abs_coords, y, split_pull_push=True)
+                absoute_embedding = self.anchor_loss.absoute_embedding(embedding, abs_coords)
+                pull_loss, push_loss = self.validation_loss(absoute_embedding, abs_coords, y, split_pull_push=True)
                 self.log(f'val_clustering_loss_margin_pull_{margin}', pull_loss.detach(), on_epoch=True, prog_bar=False, logger=True)
                 self.log(f'val_clustering_loss_margin_push_{margin}', push_loss.detach(), on_epoch=True, prog_bar=False, logger=True)
                 self.log(f'val_clustering_loss_margin_both_{margin}', (pull_loss+push_loss).detach(), on_epoch=True, prog_bar=False, logger=True)

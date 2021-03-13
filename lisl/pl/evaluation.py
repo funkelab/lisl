@@ -282,8 +282,8 @@ class AnchorSegmentationValidation(Callback):
                           dilation=1)
 
             embedding_relative = torch.empty((x.shape[0], edim) + x.shape[-2:])
-            embedding = torch.empty((x.shape[0], edim) + x.shape[-2:])
-
+            embedding = None
+            
             for i in range(x.shape[-2]):
                 patches = torch.stack(list(pf(x0) for x0 in padded[:, :, i:i+(patch_size)]))
                 # patches.shape = (batch_size, num_patches, 2, patch_width, patch_height)
@@ -291,12 +291,21 @@ class AnchorSegmentationValidation(Callback):
 
                 patches = patches.cuda()
                 pred_i = pl_module.forward_patches(patches, augmentation=augmentation)
-                pred_i = pred_i.to(embedding.device)
+
+                # turn into absolute embeddings
+                coordinates = torch.stack((torch.arange(x.shape[-1]).float(),
+                                           i * torch.ones((x.shape[-1], )).float()), dim=-1)[None]
+                coordinates = coordinates.to(pred_i.device)
+                pred_i_abs = pl_module.anchor_loss.absoute_embedding(pred_i, coordinates)
+                abs_edim = pred_i_abs.shape[-1]
+                if embedding is None:
+                    embedding = torch.empty((x.shape[0], abs_edim) + x.shape[-2:])
+
+                pred_i = pred_i.to(embedding_relative.device)
+                pred_i_abs = pred_i_abs.to(embedding.device)
 
                 embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
-                embedding[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
-                embedding[:, 0, i] += torch.arange(x.shape[-1])[None]
-                embedding[:, 1, i] += i
+                embedding[:, :, i] = pred_i_abs.permute(0, 2, 1).view(b, abs_edim, x.shape[-1])
 
         return embedding, embedding_relative
 
@@ -510,7 +519,7 @@ class AnchorSegmentationValidation(Callback):
             self.visualizalize_segmentation_dict(mws_seg, x, f'{eval_directory}/mws_seg_{batch_idx}_{pl_module.local_rank}')
 
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
-        for augmentation in ["noaugmentation", "rotflip"]:
+        for augmentation in ["noaugmentation"]:
             self.full_evaluation(trainer, pl_module, batch, batch_idx, dataloader_idx, augmentation)
 
 class AnchorMeanshift():
