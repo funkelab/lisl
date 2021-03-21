@@ -7,6 +7,7 @@ import argparse
 import gunpowder as gp
 import logging
 import lisl
+from lisl.pl.model import PatchedResnet
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +27,17 @@ def predict_frame(
         dataset_raw_key="train/raw",
         dataset_prediction_key="train/prediction",
         dataset_intermediate_key="train/prediction_interm",
+        model_input_tensor_name="patches",#"raw_0",
         num_workers=1):
 
     # initialize model
-    model = lisl.models.create(model_configfile)
+    model = PatchedResnet(1, 2, resnet_size=18)#lisl.models.create(model_configfile)
+    model.add_spatial_dim = True
     model.eval()
 
     # gp variables
     in_shape = gp.Coordinate(in_shape)
     out_shape = gp.Coordinate(out_shape)
-    input_name = "raw_0"
     raw = gp.ArrayKey(f'RAW_{inference_frame}')
     prediction = gp.ArrayKey(f'PREDICTION_{inference_frame}')
     intermediate_prediction = gp.ArrayKey(f'ITERM_{inference_frame}')
@@ -69,7 +71,7 @@ def predict_frame(
 
     pipeline += gp.torch.Predict(
         model,
-        inputs={input_name: raw},
+        inputs={model_input_tensor_name: raw},
         outputs=pred_dict,
         array_specs=pred_spec,
         checkpoint=model_checkpoint,
@@ -103,7 +105,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_shape', type=int, nargs='+')
     parser.add_argument('--model_output', default="semantic_embedding")
     parser.add_argument('--model_configfile')
-    parser.add_argument('--model_checkpoint')
+    parser.add_argument('--model_checkpoint', default=None)
     parser.add_argument('--input_dataset_file')
     parser.add_argument('--out_dir')
     parser.add_argument('--out_filename')

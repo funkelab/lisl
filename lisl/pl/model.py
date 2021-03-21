@@ -84,6 +84,8 @@ class PatchedResnet(nn.Module):
             nn.ReLU(),
             nn.Linear(features_in_last_layer, out_channels))
 
+        self.add_spatial_dim = False
+
     def forward(self, patches):
         # patches has to be a Tensor with
         # patch.shape == (minibatch, channels, patch_width, patch_height)
@@ -96,37 +98,10 @@ class PatchedResnet(nn.Module):
         # apply small MLP
         z = self.head(h)
         # z.shape = (minibatch, outchannels)
+        if self.add_spatial_dim:
+            return h[..., None, None], z[..., None, None]
+
         return h, z
-
-
-    # def predict(self, x, device=None):
-    #     """ Densly predict the embedding for every pixel in x
-    #     To save memory, Each scanline is predicted individually and stacked together"""
-
-    #     lp = (self.patchsize // 2) * self.dilation
-    #     rp = ((self.patchsize - 1) // 2) * self.dilation
-
-    #     # padd the image to get one patch corresponding to each pixel 
-    #     padded = F.pad(x, (lp, rp, lp, rp), mode='reflect')
-
-    #     with torch.no_grad():
-
-    #         out = []
-    #         for i in range(x.shape[-2]):
-    #             patches = torch.stack(list(self.pred_patch(x0) for x0 in padded[:, :, i:i+(self.patchsize * self.dilation)]))
-    #             b, p, c, pw, ph = patches.shape
-    #             patches = patches.view(b*p, c, pw, ph)
-    #             pred_i = self.resnet(patches)
-    #             pred_i = pred_i.view((b, p, -1))
-    #             pred_i = pred_i.permute(0, 2, 1).view(b, pred_i.shape[-1], 1, x.shape[-1])
-
-    #             if device is not None:
-    #                 pred_i = pred_i.to(device)
-
-    #             out.append(pred_i)
-    #         out = torch.cat(out, dim=2)
-
-    #     return out
 
 def get_unet_kernels(ndim):
     if ndim == 3:

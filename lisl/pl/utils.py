@@ -14,6 +14,7 @@ import inspect
 from inferno.io.transform.base import Transform
 from skimage.transform import rescale
 from functools import partial
+from pytorch_lightning.callbacks import Callback
 
 def offset_slice(offset, reverse=False, extra_dims=0):
     def shift(o):
@@ -476,3 +477,22 @@ def import_by_string(name):
     for comp in components[1:]:
         mod = getattr(mod, comp)
     return mod
+
+
+class SaveModelOnValidation(Callback):
+
+    def __init__(self, run_segmentation=False, device='cpu'):
+        self.run_segmentation = run_segmentation
+        self.device = device
+
+        super().__init__()
+
+    def on_validation_epoch_start(self, trainer, pl_module):
+        """Called when the validation loop begins."""
+        model_directory = os.path.abspath(os.path.join(pl_module.logger.log_dir,
+                                                      os.pardir,
+                                                      os.pardir,
+                                                      "models"))
+        model_save_path = os.path.join(model_directory, f"model_{pl_module.global_step:08d}.torch")
+        os.makedirs(model_directory, exist_ok=True)
+        torch.save({"model_state_dict":pl_module.model.state_dict()}, model_save_path)

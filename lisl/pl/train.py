@@ -9,7 +9,7 @@ from argparse import ArgumentParser
 import pytorch_lightning as pl
 from lisl.pl.trainer import SSLTrainer
 from lisl.pl.datamodules import MosaicDataModule, SSLDataModule
-from lisl.pl.utils import save_args, import_by_string
+from lisl.pl.utils import save_args, import_by_string, SaveModelOnValidation
 from lisl.pl.evaluation import SupervisedLinearSegmentationValidation, AnchorSegmentationValidation
 from lisl.pl.callbacks import Timing
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -48,13 +48,12 @@ if __name__ == '__main__':
     anchor_val = AnchorSegmentationValidation(run_segmentation=False)
     lr_logger = LearningRateMonitor(logging_interval='step')
     timer = Timing()
-    model_saver = ModelCheckpoint(save_last=True, save_weights_only=False, period=100)
+    model_saver = SaveModelOnValidation()
 
     #  init trainer
     trainer = pl.Trainer.from_argparse_args(args)
 
-    # trainer.callbacks.append(ssl_test_acc)
+    trainer.callbacks.append(model_saver)
     trainer.callbacks.append(anchor_val)
     trainer.callbacks.append(lr_logger)
-    trainer.callbacks.append(timer)
     trainer.fit(model, datamodule)
