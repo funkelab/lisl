@@ -142,7 +142,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         return parser
 
     def forward(self, x):
-        return self.model(x)
+        return self.model(x)[1]
 
     def forward_patches(self, x, abs_coords=None, img=None, augmentation='nothing', vis=False):
         # expects input in the shape of
@@ -158,10 +158,10 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             inp_tp_flip = torch.flip(inp_tp, [-2, -1]).detach()
 
             # forward through model
-            out = self.model(inp)
-            out_tp = self.model(inp_tp)
-            out_flip = self.model(inp_flip)
-            out_tp_flip = self.model(inp_tp_flip)
+            out = self.forward(inp)
+            out_tp = self.forward(inp_tp)
+            out_flip = self.forward(inp_flip)
+            out_tp_flip = self.forward(inp_tp_flip)
 
             # flip and transpose output embeddings
             shuffle_index = [1, 0] + [_ for _ in range(2, out.shape[-1])]
@@ -181,10 +181,10 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                 inp_r3 = torch.rot90(inp_r0, 3, [-2, -1]).detach()
 
             # forward through model
-            out_r0 = self.model(inp_r0)
-            out_r1 = self.model(inp_r1)
-            out_r2 = self.model(inp_r2)
-            out_r3 = self.model(inp_r3)
+            out_r0 = self.forward(inp_r0)
+            out_r1 = self.forward(inp_r1)
+            out_r2 = self.forward(inp_r2)
+            out_r3 = self.forward(inp_r3)
 
             # rotate output embeddings
             shuffle_index = [1, 0] + [_ for _ in range(2, out_r0.shape[-1])]
@@ -208,13 +208,13 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                 inp_r3 = torch.rot90(inp_r0, 3, [-2, -1]).detach()
 
             # forward through model
-            out_r0 = self.model(inp_r0)
-            out_r1 = self.model(inp_r1)
-            out_r2 = self.model(inp_r2)
-            out_r3 = self.model(inp_r3)
-            out_tp = self.model(inp_tp)
-            out_flip = self.model(inp_flip)
-            out_tp_flip = self.model(inp_tp_flip)
+            out_r0 = self.forward(inp_r0)
+            out_r1 = self.forward(inp_r1)
+            out_r2 = self.forward(inp_r2)
+            out_r3 = self.forward(inp_r3)
+            out_tp = self.forward(inp_tp)
+            out_flip = self.forward(inp_flip)
+            out_tp_flip = self.forward(inp_tp_flip)
 
 
             # rotate output embeddings
@@ -233,7 +233,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             # average embeddings
             out = (2 * out_r0 + out_r1 + out_r2 + out_r3 + out_tp + out_flip + out_tp_flip) / 8. 
         else:
-            out = self.model(x.view(-1, c, pw, ph))
+            out = self.forward(x.view(-1, c, pw, ph))
 
         out = out.view(b, p, self.out_channels)
         return out
@@ -246,10 +246,10 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
     def build_loss(self, ):
         self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
-        self.anchor_loss = SineAnchorLoss(self.temperature,
-                                          self.loss_direction_vector_file,
-                                          self.loss_distances_file)
-        # self.anchor_loss = AnchorLoss(self.temperature)
+        # self.anchor_loss = SineAnchorLoss(self.temperature,
+        #                                   self.loss_direction_vector_file,
+        #                                   self.loss_distances_file)
+        self.anchor_loss = AnchorLoss(self.temperature)
 
     def training_step(self, batch, batch_nb):
 

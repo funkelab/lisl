@@ -108,6 +108,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_dir')
     parser.add_argument('--out_filename')
     parser.add_argument('--inference_frame', type=int)
+    parser.add_argument('--intermediate_layer', type=int)
     parser.add_argument('--dataset_raw_key', default="train/raw")
     parser.add_argument('--dataset_prediction_key', default="train/prediction")
     parser.add_argument('--default_root_dir', default=None)
@@ -124,5 +125,6 @@ if __name__ == "__main__":
         options.inference_frame,
         options.out_dir,
         options.out_filename,
+        intermediate_layer=options.intermediate_layer,
         dataset_raw_key=options.dataset_raw_key,
         dataset_prediction_key=options.dataset_prediction_key)

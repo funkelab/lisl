@@ -52,7 +52,7 @@ class PatchedResnet(nn.Module):
             self,
             in_channels,
             out_channels,
-            resnet_size=18,
+            resnet_size=50,
             pretrained=False):
 
         super().__init__()
@@ -72,24 +72,31 @@ class PatchedResnet(nn.Module):
             if in_channels == 1:
                 model.conv1.weight.data = ptweights
 
-        # turn last layer into a 2d convolution
-        fc_conv = nn.Conv2d(features_in_last_layer, out_channels, kernel_size=1, padding=0, bias=True)
-        fc_conv.weight.data = 1. * fc_conv.weight.data
-        fc_conv.bias.data = 1. * fc_conv.bias.data
-        # fc_conv.weight.data = model.fc.weight.data[:out_channels, :, None, None]
-        # fc_conv.bias.data = model.fc.bias.data[:out_channels]
-
-        layers = list(model.children())[:-1] + [fc_conv]
+        layers = list(model.children())[:-1]
         model = torch.nn.Sequential(*layers)
-
         self.resnet = model.train()
+
+        # Commonly used Non-linear projection head
+        # see https://arxiv.org/pdf/1906.00910.pdf
+        # or https://arxiv.org/pdf/2002.05709.pdf
+        self.head = torch.nn.Sequential(
+            nn.Linear(features_in_last_layer, features_in_last_layer),
+            nn.ReLU(),
+            nn.Linear(features_in_last_layer, out_channels))
 
     def forward(self, patches):
         # patches has to be a Tensor with
         # patch.shape == (minibatch, channels, patch_width, patch_height)
-        out = self.resnet(patches).mean(dim=(-2, -1)) 
-        # out.shape = (minibatch, outchannels)
-        return out
+
+        h = self.resnet(patches)
+        h = torch.flatten(h, 1)
+        # get output directly after avg pooling layer
+        # h.shape == (minibatch, features_in_last_layer)
+
+        # apply small MLP
+        z = self.head(h)
+        # z.shape = (minibatch, outchannels)
+        return h, z
 
 
     # def predict(self, x, device=None):

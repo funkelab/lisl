@@ -30,8 +30,9 @@ if __name__ == '__main__':
                               options.script,
                               options.experiment,
                               experiment_number,
-                              options.cleanup,
-                              args)
+                              experiment_chapter="01_train",
+                              clean_up=options.cleanup,
+                              arguments=args)
 
             experiment_number += 1
 
