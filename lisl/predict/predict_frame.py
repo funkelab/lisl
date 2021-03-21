@@ -10,20 +10,23 @@ import lisl
 
 logger = logging.getLogger(__name__)
 
-def predict_frame(
-    in_shape,
-    out_shape,
-    model_output,
-    model_configfile,
-    model_checkpoint,
-    input_dataset_file,
-    inference_frame,
-    out_dir,
-    out_filename,
-    dataset_raw_key = "train/raw",
-    dataset_prediction_key = "train/prediction",
-    num_workers=1):
 
+def predict_frame(
+        in_shape,
+        out_shape,
+        model_output,
+        model_configfile,
+        model_checkpoint,
+        input_dataset_file,
+        inference_frame,
+        out_dir,
+        out_filename,
+        out_key_or_index=1,
+        intermediate_layer=None,
+        dataset_raw_key="train/raw",
+        dataset_prediction_key="train/prediction",
+        dataset_intermediate_key="train/prediction_interm",
+        num_workers=1):
 
     # initialize model
     model = lisl.models.create(model_configfile)
@@ -35,8 +38,11 @@ def predict_frame(
     input_name = "raw_0"
     raw = gp.ArrayKey(f'RAW_{inference_frame}')
     prediction = gp.ArrayKey(f'PREDICTION_{inference_frame}')
+    intermediate_prediction = gp.ArrayKey(f'ITERM_{inference_frame}')
+
     ds_key = f'{dataset_raw_key}/{inference_frame}'
     out_key = f'{dataset_prediction_key}/{inference_frame}'
+    interm_key = f'{dataset_intermediate_key}/{inference_frame}'
 
     # build pipeline
     zsource = gp.ZarrSource(input_dataset_file,
@@ -54,17 +60,18 @@ def predict_frame(
     pipeline += AddChannelDim(raw)
 
     pipeline += gp.Pad(raw, context)
+    # setup prediction node
+    pred_dict = {out_key_or_index: prediction}
+    pred_spec = {prediction: gp.ArraySpec(roi=raw_roi)}
+    if intermediate_layer is not None:
+        pred_dict[intermediate_layer] = intermediate_prediction
+        pred_spec[intermediate_prediction] = gp.ArraySpec(roi=raw_roi)
+
     pipeline += gp.torch.Predict(
         model,
-        inputs={
-            input_name: raw
-        },
-        outputs={
-            1: prediction
-        },
-        array_specs={
-            prediction: gp.ArraySpec(roi=raw_roi)
-        },
+        inputs={input_name: raw},
+        outputs=pred_dict,
+        array_specs=pred_spec,
         checkpoint=model_checkpoint,
         spawn_subprocess=True
     )
@@ -73,13 +80,15 @@ def predict_frame(
     request.add(raw, in_shape)
     request.add(prediction, out_shape)
 
+    zarr_dict = {prediction: out_key}
+    if intermediate_layer is not None:
+        zarr_dict[intermediate_prediction] = interm_key
+        request.add(intermediate_prediction, out_shape)
     pipeline += gp.ZarrWrite(
-            {
-                prediction: out_key,
-            },
-            output_dir=out_dir,
-            output_filename=out_filename,
-            compression_type='gzip') + \
+        zarr_dict,
+        output_dir=out_dir,
+        output_filename=out_filename,
+        compression_type='gzip') + \
         gp.Scan(request, num_workers=num_workers)
 
     total_request = gp.BatchRequest()
@@ -102,7 +111,6 @@ if __name__ == "__main__":
     parser.add_argument('--dataset_raw_key', default="train/raw")
     parser.add_argument('--dataset_prediction_key', default="train/prediction")
     parser.add_argument('--default_root_dir', default=None)
-    
 
     options = parser.parse_args()
 
