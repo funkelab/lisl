@@ -52,10 +52,6 @@ def predict_frame(
                             {raw: gp.ArraySpec(interpolatable=True, voxel_size=(1, 1))})
 
     pipeline = zsource
-
-    # right_context = (in_shape - out_shape) / 2
-    # left_context = (in_shape - out_shape) - right_context
-
     with gp.build(zsource):
         raw_roi = zsource.spec[raw].roi
         logger.info(f"raw_roi: {raw_roi}")

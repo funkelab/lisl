@@ -57,14 +57,9 @@ class PatchedResnet(nn.Module):
 
         super().__init__()
 
-        if resnet_size == 18:
-            model = models.resnet18(pretrained=pretrained)
-            features_in_last_layer = 512
-        elif resnet_size == 50:
-            model = models.resnet50(pretrained=pretrained)
-            features_in_last_layer = 2048
-        else:
-            raise NotImplementedError()
+        assert hasattr(models, f"resnet{resnet_size}")
+        model = getattr(models, f"resnet{resnet_size}")(pretrained=pretrained)
+        features_in_last_layer = list(model.children())[-1].in_features        
 
         if in_channels != 3:
             ptweights = model.conv1.weight.mean(dim=1, keepdim=True).data
