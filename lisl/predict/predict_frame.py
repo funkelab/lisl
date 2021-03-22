@@ -28,7 +28,7 @@ def predict_frame(
         dataset_prediction_key="train/prediction",
         dataset_intermediate_key="train/prediction_interm",
         model_input_tensor_name="patches",#"raw_0",
-        num_workers=1):
+        num_workers=5):
 
     # initialize model
     model = PatchedResnet(1, 2, resnet_size=18)#lisl.models.create(model_configfile)
@@ -53,7 +53,9 @@ def predict_frame(
 
     pipeline = zsource
 
-    context = (in_shape - out_shape) / 2
+    # right_context = (in_shape - out_shape) / 2
+    # left_context = (in_shape - out_shape) - right_context
+
     with gp.build(zsource):
         raw_roi = zsource.spec[raw].roi
         logger.info(f"raw_roi: {raw_roi}")
@@ -61,7 +63,7 @@ def predict_frame(
     pipeline += AddChannelDim(raw)
     pipeline += AddChannelDim(raw)
 
-    pipeline += gp.Pad(raw, context)
+    pipeline += gp.Pad(raw, None)
     # setup prediction node
     pred_dict = {out_key_or_index: prediction}
     pred_spec = {prediction: gp.ArraySpec(roi=raw_roi)}
@@ -86,17 +88,19 @@ def predict_frame(
     if intermediate_layer is not None:
         zarr_dict[intermediate_prediction] = interm_key
         request.add(intermediate_prediction, out_shape)
+    pipeline += gp.Scan(request, num_workers=num_workers)
     pipeline += gp.ZarrWrite(
         zarr_dict,
         output_dir=out_dir,
         output_filename=out_filename,
-        compression_type='gzip') + \
-        gp.Scan(request, num_workers=num_workers)
+        compression_type='gzip')
 
     total_request = gp.BatchRequest()
+    total_request[prediction] = gp.ArraySpec(roi=raw_roi)
+    if intermediate_layer is not None:
+        total_request[intermediate_prediction] = gp.ArraySpec(roi=raw_roi)
     with gp.build(pipeline):
         pipeline.request_batch(total_request)
-
 
 if __name__ == "__main__":
 

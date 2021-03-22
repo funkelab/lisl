@@ -84,11 +84,18 @@ class PatchedResnet(nn.Module):
             nn.ReLU(),
             nn.Linear(features_in_last_layer, out_channels))
 
+        self.patchsize = 16
         self.add_spatial_dim = False
 
     def forward(self, patches):
         # patches has to be a Tensor with
         # patch.shape == (minibatch, channels, patch_width, patch_height)
+        assert len(patches.shape) == 4
+
+        # if a larger image than the patchsize was given
+        if patches.shape[-1] > self.patchsize or patches.shape[-2] > self.patchsize:
+            # divide image into patches and run inference
+            return self.patch_and_forward(patches)
 
         h = self.resnet(patches)
         h = torch.flatten(h, 1)
@@ -102,6 +109,33 @@ class PatchedResnet(nn.Module):
             return h[..., None, None], z[..., None, None]
 
         return h, z
+
+    def patch_and_forward(self, image):
+
+        pf = Patchify(patch_size=self.patchsize,
+                      overlap_size=self.patchsize-1,
+                      dilation=1)
+
+        patches = torch.cat(list(pf(x0) for x0 in image))
+        h, z = self.forward(patches)
+        # h.shape = (b x patches, z_c)
+        # z.shape = (b x patches, h_c)
+
+        # get output dimensions
+        b = image.shape[0]
+        out_width = image.shape[-2] - self.patchsize + 1
+        out_height = image.shape[-1] - self.patchsize + 1
+        h_channels = h.shape[1]
+        z_channels = z.shape[1]
+
+        # reshape to output dimensions
+        h = h.reshape(b, -1, h_channels).transpose(2, 1)\
+            .view(b, h_channels, out_width, out_height)
+        z = z.reshape(b, -1, z_channels).transpose(2, 1)\
+            .view(b, z_channels, out_width, out_height)
+
+        return h,z,
+
 
 def get_unet_kernels(ndim):
     if ndim == 3:
