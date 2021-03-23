@@ -196,7 +196,7 @@ class AnchorDataModule(pl.LightningDataModule):
         return DataLoader(self.ds_val,
                           batch_size=1,
                           shuffle=False,
-                          num_workers=1,
+                          num_workers=2,
                           worker_init_fn=pl.utilities.seed.seed_everything,
                           drop_last=False)
 

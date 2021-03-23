@@ -42,9 +42,8 @@ class SupervisedInstanceEmbeddingLoss(Module):
         return cluster_distances.mean()
 
     def forward(self, abs_embedding, coordinates, y, split_pull_push=False):
-        # get labels a coodinates
-        pull_loss = 0
-        push_loss = 0
+        pull_loss = torch.tensor(0.).to(abs_embedding.device())
+        push_loss = torch.tensor(0.).to(abs_embedding.device())
 
         for b in range(len(y)):
             cx = coordinates[b, :, 1].long()
