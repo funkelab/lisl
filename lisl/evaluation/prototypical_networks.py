@@ -7,7 +7,7 @@ from torchmeta.datasets.fastdataset import FastCombinationMetaDataset
 from torchmeta.datasets.helpers import fast_dataset_creator, omniglot
 
 from torchmeta.utils.data import BatchMetaDataLoader
-from torchmeta.utils.matching import matching_log_probas, matching_loss, spatial_matching_loss, spatial_matching_log_probas
+from torchmeta.utils.prototype import get_prototypes, prototypical_loss, get_accuracy
 
 import torch.nn as nn
 from torch.utils.data.dataset import Dataset
@@ -18,21 +18,27 @@ from lisl.utils.sampling import roundrobin_break_early
 from lisl.models.model import MLP
 
 
-class MatchingNetwork(nn.Module):
+class PrototypicalNetwork(nn.Module):
     def __init__(self, in_channels, out_channels, hidden_size=512):
-        super(MatchingNetwork, self).__init__()
+        super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.hidden_size = hidden_size
 
         self.ndim = 2
 
-        self.spatial_encoder = MLP(in_channels,
+        self.spatial_instance_encoder = MLP(in_channels,
                                    self.ndim,
                                    n_hidden=hidden_size,
                                    n_hidden_layers=4,
                                    p=0.1,
                                    ndim=0)
+        self.instance_encoder = MLP(in_channels,
+                                    out_channels,
+                                    n_hidden=hidden_size,
+                                    n_hidden_layers=4,
+                                    p=0.1,
+                                    ndim=0)
         
         self.semantic_encoder = MLP(in_channels,
                                     out_channels,
@@ -40,6 +46,7 @@ class MatchingNetwork(nn.Module):
                                     n_hidden_layers=4,
                                     p=0.1,
                                     ndim=0)
+
 
     def forward(self, inputs):
         
@@ -50,28 +57,29 @@ class MatchingNetwork(nn.Module):
         semantic_embeddings = self.semantic_encoder(z)
         semantic_embeddings = semantic_embeddings.view(*inputs.shape[:2], -1)
 
-        spatial_embeddings = self.spatial_encoder(z)
-        spatial_embeddings += abs_coords
-        spatial_embeddings = spatial_embeddings.view(*inputs.shape[:2], -1)
-        
-        return semantic_embeddings, spatial_embeddings
+        instance_embeddings = self.instance_encoder(z)
+        instance_embeddings = instance_embeddings.view(*inputs.shape[:2], -1)
 
+        spatial_instance_embeddings = self.spatial_instance_encoder(z)
+        spatial_instance_embeddings += abs_coords
+        spatial_instance_embeddings = spatial_instance_embeddings.view(*inputs.shape[:2], -1)
+        
+        return semantic_embeddings, spatial_instance_embeddings, instance_embeddings
 
 logger = logging.getLogger(__name__)
 
 
 def train(args):
-    logger.warning('This script is an example to showcase the extensions and '
-                   'data-loading features of Torchmeta, and as such has been '
-                   'very lightly tested.')
+
     datasets = []
-    for root_idx in range(0, 1):
+    for root_idx in tqdm(range(0, 200)):
         folders = {
             "raw": ("/nrs/funke/wolfs2/lisl/datasets/dsb_indexed.zarr", f"train/raw/{root_idx}"),
             "gt_segmentation": ("/nrs/funke/wolfs2/lisl/datasets/dsb_indexed.zarr", f"train/gt_segmentation/{root_idx}"),
             "embedding": (("/nrs/funke/wolfs2/lisl/experiments/semantic/c32/prediction/anchor.zarr", f"train/prediction_interm/{root_idx}"),
                           ("/nrs/funke/wolfs2/lisl/experiments/semantic/c32/prediction/semantic.zarr", f"train/prediction/{root_idx}")),
-            "min_samples": 10}
+            "min_samples": 10,
+            "bg_distance": 20}
         
         ds = fast_dataset_creator(folders,
                                   shots=args.num_shots,
@@ -81,9 +89,9 @@ def train(args):
                                   transform=None,
                                   meta_train=True)
 
-        print("ds ", root_idx, " loaded")
-
         datasets.append(ds)
+
+    os.makedirs(args.output_folder, exist_ok=True)
 
     loaders = []
     for ds in datasets:
@@ -92,7 +100,7 @@ def train(args):
                                         shuffle=True,
                                         num_workers=args.num_workers))
 
-    model = MatchingNetwork(544,
+    model = PrototypicalNetwork(544,
                             args.embedding_size,
                             hidden_size=args.hidden_size)
     model.to(device=args.device)
@@ -102,9 +110,9 @@ def train(args):
     print("starting")
 
     accuracy_window = {}
-    accuracy_window["precision"] = []
-    accuracy_window["recall"] = []
-    accuracy_window["fscore"] = []
+    accuracy_window["inst_accuracy"] = []
+    accuracy_window["sem_accuracy"] = []
+    accuracy_window["combined"] = []
 
     # Training loop
     for epoch in range(500):
@@ -115,71 +123,64 @@ def train(args):
             for batch_idx, batch in enumerate(pbar):
                 model.zero_grad()
 
-                train_inputs, train_targets = batch['train']
+                train_inputs, train_instance_targets, train_semantic_targets = batch['train']
                 train_inputs = train_inputs.to(device=args.device)
-                train_targets = train_targets.to(device=args.device)
-                train_semantic_embeddings, train_spatial_embeddings = model(train_inputs)
+                train_instance_targets = train_instance_targets.to(device=args.device)
+                train_semantic_targets = train_semantic_targets.to(device=args.device)
 
-                test_inputs, test_targets = batch['test']
+                train_semantic_embeddings, train_spatial_instance_embeddings, train_instance_embeddings = model(train_inputs)
+
+                test_inputs, test_instance_targets, test_semantic_targets = batch['test']
                 test_inputs = test_inputs.to(device=args.device)
-                test_targets = test_targets.to(device=args.device)
-                test_semantic_embeddings, test_spatial_embeddings = model(test_inputs)
+                test_instance_targets = test_instance_targets.to(device=args.device)
+                test_semantic_targets = test_semantic_targets.to(device=args.device)
+                test_semantic_embeddings, test_spatial_instance_embeddings, test_instance_embeddings = model(test_inputs)
 
-                loss = spatial_matching_loss(train_spatial_embeddings,
-                                             train_semantic_embeddings,
-                                             test_spatial_embeddings,
-                                             test_semantic_embeddings,
-                                             train_targets,
-                                             test_targets,
-                                             args.num_ways,
-                                             eps=1e-8)
+                # semantic loss
+                semantic_prototypes = get_prototypes(train_semantic_embeddings, train_semantic_targets, 2)
+                semantic_loss = prototypical_loss(semantic_prototypes, test_semantic_embeddings, test_semantic_targets)
+
+                # instance loss
+                train_inst_emb = torch.cat((train_spatial_instance_embeddings, train_instance_embeddings), dim=-1)
+                test_inst_emb = torch.cat((test_spatial_instance_embeddings, test_instance_embeddings), dim=-1)
+                instance_prototypes = get_prototypes(
+                    train_inst_emb, train_instance_targets, args.num_ways)
+                instance_loss = prototypical_loss(instance_prototypes, test_inst_emb, test_instance_targets)
+
+                loss = semantic_loss + instance_loss
 
                 loss.backward()
                 optimizer.step()
 
                 with torch.no_grad():
-                    # calculate the accuracy
-                    print(train_spatial_embeddings.shape,
-                          train_semantic_embeddings.shape,
-                          test_spatial_embeddings.shape,
-                          test_semantic_embeddings.shape,
-                          train_targets.shape,
-                          test_targets.shape,
-                          args.num_ways)
-                    log_probas = spatial_matching_log_probas(train_spatial_embeddings,
-                                                             train_semantic_embeddings,
-                                                             test_spatial_embeddings,
-                                                             test_semantic_embeddings,
-                                                             train_targets,
-                                                             test_targets,
-                                                             args.num_ways,
-                                                             eps=1e-8)
+                    inst_accuracy = get_accuracy(instance_prototypes, test_inst_emb, test_instance_targets)
+                    sem_accuracy = get_accuracy(semantic_prototypes, test_semantic_embeddings, test_semantic_targets)
 
-                    test_predictions = torch.argmax(log_probas, dim=1)
-                    precision, recall, fscore, _ = sklearn.metrics.precision_recall_fscore_support(test_targets.cpu().numpy().ravel(),
-                                                                                                   test_predictions.cpu().numpy().ravel(),
-                                                                                                   average="macro")
-                    if len(accuracy_window["precision"]) > 100:
-                        accuracy_window["precision"].pop(0)
-                        accuracy_window["recall"].pop(0)
-                        accuracy_window["fscore"].pop(0)
+                    if len(accuracy_window["inst_accuracy"]) > 100:
+                        accuracy_window["inst_accuracy"].pop(0)
+                        accuracy_window["sem_accuracy"].pop(0)
+                        accuracy_window["combined"].pop(0)
 
-                    accuracy_window["precision"].append(precision)
-                    accuracy_window["recall"].append(recall)
-                    accuracy_window["fscore"].append(fscore)
+                    accuracy_window["inst_accuracy"].append(float(inst_accuracy))
+                    accuracy_window["sem_accuracy"].append(float(sem_accuracy))
+                    accuracy_window["combined"].append(
+                        float(inst_accuracy + sem_accuracy) / 2)
 
-                    pbar.set_postfix(precision='{0:.4f}'.format(np.mean(accuracy_window["precision"])),
-                    recall='{0:.4f}'.format(np.mean(accuracy_window["recall"])),
-                    fscore='{0:.4f}'.format(np.mean(accuracy_window["fscore"])))
+                    mean_inst_acc = np.mean(accuracy_window['inst_accuracy'])
+                    mean_sem_acc = np.mean(accuracy_window['sem_accuracy'])
+                    pbar.set_postfix(
+                        inst_accuracy=f"{mean_inst_acc:.4f}",
+                        sem_accuracy=f'{mean_sem_acc:.4f}',
+                        loss=f"{loss:.4}")
 
                 if pbar.n > args.num_batches:
                     break
 
         # Save model
-        mean_f_score = np.mean(accuracy_window["fscore"])
+        score = np.mean(accuracy_window["combined"])
         if args.output_folder is not None:
             filename = os.path.join(args.output_folder, 
-                f'matching_network_{epoch}_{args.num_shots}shot_{args.num_ways}way_500maxepoch_sem_spatial_{mean_f_score:.4f}.pytorch')
+                f'prototypical_networks_{epoch}_{args.num_shots}shot_{args.num_ways}way_500maxepoch_sem_spatial_{score:.4f}.pytorch')
             print("saving", filename)
             torch.save(model.state_dict(), filename)
 
