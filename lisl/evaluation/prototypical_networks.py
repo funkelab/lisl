@@ -1,11 +1,12 @@
 import os
+import os.path
 import torch
 from tqdm import tqdm
 import logging
 import numpy as np
 from torchmeta.datasets.fastdataset import FastCombinationMetaDataset
 from torchmeta.datasets.helpers import fast_dataset_creator, omniglot
-
+import pickle
 from torchmeta.utils.data import BatchMetaDataLoader
 from torchmeta.utils.prototype import get_prototypes, prototypical_loss, get_accuracy
 
@@ -14,7 +15,7 @@ from torch.utils.data.dataset import Dataset
 import sklearn.metrics
 
 from lisl.utils.sampling import roundrobin_break_early
-
+import time
 from lisl.models.model import MLP
 
 
@@ -71,13 +72,17 @@ logger = logging.getLogger(__name__)
 
 def train(args):
 
+
     datasets = []
-    for root_idx in tqdm(range(0, 200)):
+    for root_idx in tqdm(range(args.ds_size)):
+
         folders = {
+            "index": root_idx,
+            "cache": "/nrs/funke/wolfs2/lisl/datasets/prototypical_network_cache_uncompressed_5.zarr",
             "raw": ("/nrs/funke/wolfs2/lisl/datasets/dsb_indexed.zarr", f"train/raw/{root_idx}"),
             "gt_segmentation": ("/nrs/funke/wolfs2/lisl/datasets/dsb_indexed.zarr", f"train/gt_segmentation/{root_idx}"),
             "embedding": (("/nrs/funke/wolfs2/lisl/experiments/semantic/c32/prediction/anchor.zarr", f"train/prediction_interm/{root_idx}"),
-                          ("/nrs/funke/wolfs2/lisl/experiments/semantic/c32/prediction/semantic.zarr", f"train/prediction/{root_idx}")),
+                        ("/nrs/funke/wolfs2/lisl/experiments/semantic/c32/prediction/semantic.zarr", f"train/prediction/{root_idx}")),
             "min_samples": 10,
             "bg_distance": 20}
         
@@ -89,16 +94,20 @@ def train(args):
                                   transform=None,
                                   meta_train=True)
 
-        datasets.append(ds)
+        if len(ds):
+            datasets.append(ds)
+        else:
+            print(f"dataset with id {root_idx} appears to be empty. Will be skipped")
 
     os.makedirs(args.output_folder, exist_ok=True)
 
     loaders = []
     for ds in datasets:
         loaders.append(BatchMetaDataLoader(ds,
-                                        batch_size=args.batch_size,
-                                        shuffle=True,
-                                        num_workers=args.num_workers))
+                                           batch_size=args.batch_size,
+                                           shuffle=True,
+                                           num_workers=args.num_workers))
+        time.sleep(1)
 
     model = PrototypicalNetwork(544,
                             args.embedding_size,
@@ -198,6 +207,9 @@ if __name__ == '__main__':
         help='Number of examples per class (k in "k-shot", default: 5).')
     parser.add_argument('--num-ways', type=int, default=5,
         help='Number of classes per task (N in "N-way", default: 5).')
+
+    parser.add_argument('--ds_size', type=int, default=447,
+        help='Number images in the dataset')
 
     parser.add_argument('--embedding-size', type=int, default=64,
         help='Dimension of the embedding/latent space (default: 64).')
