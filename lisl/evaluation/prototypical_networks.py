@@ -20,15 +20,15 @@ from lisl.models.model import MLP
 import torch.nn.functional as F
 
 class PrototypicalNetwork(nn.Module):
-    def __init__(self, in_channels, out_channels, n_sem_classes, hidden_size=512):
+    def __init__(self, in_channels, inst_out_channels, n_sem_classes, hidden_size=512):
         super().__init__()
         self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.inst_out_channels = inst_out_channels
         self.hidden_size = hidden_size
         self.n_sem_classes = n_sem_classes
         self.ndim = 2
         self.spatial_instance_encoder = MLP(in_channels,
-                                            out_channels,
+                                            inst_out_channels,
                                    n_hidden=hidden_size,
                                    n_hidden_layers=4,
                                    p=0.1,
@@ -67,7 +67,7 @@ def train(args):
 
         folders = {
             "index": root_idx,
-            "cache": "/nrs/funke/wolfs2/lisl/datasets/prototypical_network_cache_uncompressed_5.zarr",
+            "cache": "/nrs/funke/wolfs2/lisl/datasets/prototypical_network_cache_uncompressed_fg2.zarr",
             "raw": ("/nrs/funke/wolfs2/lisl/datasets/dsb_indexed.zarr", f"train/raw/{root_idx}"),
             "gt_segmentation": ("/nrs/funke/wolfs2/lisl/datasets/dsb_indexed.zarr", f"train/gt_segmentation/{root_idx}"),
             "embedding": (("/nrs/funke/wolfs2/lisl/experiments/semantic/c32/prediction/anchor.zarr", f"train/prediction_interm/{root_idx}"),
@@ -97,9 +97,10 @@ def train(args):
                                            shuffle=True,
                                            num_workers=args.num_workers))
         time.sleep(1)
+        print("ds loaded")
 
     model = PrototypicalNetwork(544,
-                            args.embedding_size,
+                            args.inst_embedding_size,
                             2,
                             hidden_size=args.hidden_size)
     model.to(device=args.device)
@@ -114,7 +115,7 @@ def train(args):
     accuracy_window["combined"] = []
 
     # Training loop
-    for epoch in range(50):
+    for epoch in range(500):
 
         dataloader = roundrobin_break_early(*loaders)
 
@@ -209,8 +210,9 @@ if __name__ == '__main__':
     parser.add_argument('--ds_size', type=int, default=447,
         help='Number images in the dataset')
 
-    parser.add_argument('--embedding-size', type=int, default=64,
+    parser.add_argument('--inst_embedding_size', type=int, default=2,
         help='Dimension of the embedding/latent space (default: 64).')
+
     parser.add_argument('--hidden-size', type=int, default=64,
         help='Number of channels for each convolutional layer (default: 64).')
 
