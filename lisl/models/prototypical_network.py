@@ -13,10 +13,10 @@ class PrototypicalNetwork(nn.Module):
         self.ndim = 2
         self.spatial_instance_encoder = MLP(in_channels,
                                             inst_out_channels,
-                                   n_hidden=hidden_size,
-                                   n_hidden_layers=4,
-                                   p=0.1,
-                                   ndim=0)
+                                            n_hidden=hidden_size,
+                                            n_hidden_layers=4,
+                                            p=0.1,
+                                            ndim=0)
        
         self.semantic_encoder = MLP(in_channels,
                                     self.n_sem_classes,
@@ -32,4 +32,4 @@ class PrototypicalNetwork(nn.Module):
         semantic_embeddings = self.semantic_encoder(z)
         spatial_instance_embeddings = self.spatial_instance_encoder(z)
         spatial_instance_embeddings[..., :self.ndim] += abs_coords
-        return semantic_embeddings, spatial_instance_embeddings
+        return spatial_instance_embeddings, semantic_embeddings
