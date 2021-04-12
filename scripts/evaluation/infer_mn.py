@@ -35,7 +35,6 @@ for frame in range(400):
     print([x.shape for x in emb])
     emb = np.concatenate(emb, axis=1)
 
-
     x = np.arange(emb.shape[-1], dtype=np.float32)
     y = np.arange(emb.shape[-2], dtype=np.float32)
 

@@ -3,7 +3,6 @@ from funlib.learn.torch.models.conv4d import Conv4d
 import funlib
 import torch
 
-
 class UNet(Model):
 
     def __init__(
