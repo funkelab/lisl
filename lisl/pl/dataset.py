@@ -311,6 +311,7 @@ class DSBDataset(Dataset):
 
     def __init__(self,
                  pathname,
+                 split="train",
                  **kwargs):
 
         path = Path(pathname)
@@ -323,8 +324,8 @@ class DSBDataset(Dataset):
         )
 
         # read dataset to memory
-        self.X = sorted(path.glob('data/dsb2018/train/images/*.tif'))
-        self.Y = sorted(path.glob('data/dsb2018/train/masks/*.tif'))
+        self.X = sorted(path.glob(f'data/dsb2018/{split}/images/*.tif'))
+        self.Y = sorted(path.glob(f'data/dsb2018/{split}/masks/*.tif'))
         assert all(Path(x).name==Path(y).name for x,y in zip(self.X,self.Y))
         self.X = [tiffread(str(e)) for e in self.X]
         self.Y = [tiffread(str(e)) for e in self.Y]
