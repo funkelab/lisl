@@ -27,11 +27,18 @@ def predict_frame(
         dataset_raw_key="train/raw",
         dataset_prediction_key="train/prediction",
         dataset_intermediate_key="train/prediction_interm",
-        model_input_tensor_name="patches",#"raw_0",
+        model_input_tensor_name="patches",
+        model_architecture="PatchedResnet",
         num_workers=5):
 
     # initialize model
-    model = PatchedResnet(1, 2, resnet_size=18)#lisl.models.create(model_configfile)
+    if model_architecture == "PatchedResnet":
+        model = PatchedResnet(1, 2, resnet_size=18)
+    elif model_architecture == "unet":
+        model = lisl.models.create(model_configfile)
+    else:
+        raise NotImplementedError(f"{model_architecture} not implemented")
+    
     model.add_spatial_dim = True
     model.eval()
 
@@ -114,6 +121,8 @@ if __name__ == "__main__":
     parser.add_argument('--dataset_raw_key', default="train/raw")
     parser.add_argument('--dataset_prediction_key', default="train/prediction")
     parser.add_argument('--default_root_dir', default=None)
+    parser.add_argument('--model_input_tensor_name', default="patches")
+    parser.add_argument('--model_architecture', default="PatchedResnet")
 
     options = parser.parse_args()
 
@@ -129,4 +138,6 @@ if __name__ == "__main__":
         options.out_filename,
         intermediate_layer=options.intermediate_layer,
         dataset_raw_key=options.dataset_raw_key,
-        dataset_prediction_key=options.dataset_prediction_key)
+        dataset_prediction_key=options.dataset_prediction_key,
+        model_architecture=options.model_architecture,
+        model_input_tensor_name=options.model_input_tensor_name)
