@@ -5,6 +5,7 @@ import numpy as np
 
 expname = "pn_dsb_04"
 expname = "pn_dsb_dev16"
+expname = "pn_dsb_05"
 base_folder = f"/nrs/funke/wolfs2/lisl/experiments/{expname}/03_fast/"
 prediction_file = "/nrs/funke/wolfs2/lisl/datasets/fast_dsb_img_test.zarr"
 

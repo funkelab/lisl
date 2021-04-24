@@ -20,7 +20,7 @@ class MLP(nn.Module):
               (2,3) uses 1x1 convolution layers
               dim = 0 uses linear (fully connected) layers
     """
-    def __init__(self, n_input, n_classes, n_hidden=512, n_hidden_layers=1, p=0.1, ndim=2):
+    def __init__(self, n_input, n_classes, n_hidden=512, n_hidden_layers=1, p=0.1, ndim=2, with_batchnorm=False):
         super().__init__()
 
         self.n_input = n_input
@@ -57,7 +57,10 @@ class MLP(nn.Module):
                 self.block_forward.add_module(f"conv_{i}", conv(n_feats, n_hidden, 1, bias=False))
             else:
                 self.block_forward.add_module(f"conv_{i}", conv(n_feats, n_hidden, bias=False))
-            self.block_forward.add_module(f"bn_{i}", bn(n_hidden))
+            
+            if with_batchnorm:
+                self.block_forward.add_module(f"bn_{i}", bn(n_hidden))
+            
             self.block_forward.add_module(f"rl_{i}", nn.ReLU(inplace=True))
             n_feats = n_hidden
 
