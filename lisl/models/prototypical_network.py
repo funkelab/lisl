@@ -36,6 +36,21 @@ class PrototypicalNetwork(nn.Module):
         return spatial_instance_embeddings, semantic_embeddings
 
 
+class ERFNetsmooth(ERFNet):
+    def __init__(self, *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+        self.head = nn.Sequential(
+            torch.nn.Upsample(scale_factor=2,
+                              mode="bilinear",
+                              align_corners=False),
+            nn.Conv2d(in_channels=self.head.in_channels,
+                      out_channels=self.head.out_channels,
+                      kernel_size=5,
+                      padding=2,
+                      bias=True))
+
+
 class PrototypicalERFNetwork(nn.Module):
     def __init__(self, in_channels, inst_out_channels, n_sem_classes, hidden_size=512, in_size=(256, 256)):
         super().__init__()
@@ -63,21 +78,21 @@ class PrototypicalERFNetwork(nn.Module):
             nn.Conv2d(in_channels, 8, 1),
             torch.nn.ReLU())
 
-        self.spatial_instance_encoder = ERFNet(channels,
-                                               dilations,
-                                               dropout_rates,
-                                               downs,
-                                               in_channels=8,
-                                               in_size=in_size,
-                                               num_classes=inst_out_channels)
+        self.spatial_instance_encoder = ERFNetsmooth(channels,
+                                                     dilations,
+                                                     dropout_rates,
+                                                     downs,
+                                                     in_channels=8,
+                                                     in_size=in_size,
+                                                     num_classes=inst_out_channels)
 
-        self.semantic_encoder = ERFNet(channels,
-                                       dilations,
-                                       dropout_rates,
-                                       downs,
-                                       in_channels=8,
-                                       in_size=in_size,
-                                       num_classes=self.n_sem_classes)
+        self.semantic_encoder = ERFNetsmooth(channels,
+                                             dilations,
+                                             dropout_rates,
+                                             downs,
+                                             in_channels=8,
+                                             in_size=in_size,
+                                             num_classes=self.n_sem_classes)
         
         self.coords = None
 
