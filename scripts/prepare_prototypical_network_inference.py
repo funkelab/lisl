@@ -44,6 +44,7 @@ if __name__ == '__main__':
 
     p.add('--setuppattern', required=True)
     p.add('--datasetfile', required=True)
+    p.add('--outputfile', required=True)
     p.add('--args', required=True)
     options = p.parse_args()
 
@@ -54,7 +55,7 @@ if __name__ == '__main__':
         experimentname = f"{sp[-3]}_{sp[-1]}"
         print(f"setup dir {setup_dir}, experimentname {experimentname}")
         zarr_in_path = options.datasetfile
-        zarr_out_path = options.datasetfile
+        zarr_out_path = options.outputfile
         run(options,
             experiment_number,
             model_path=model_path,
