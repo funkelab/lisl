@@ -6,14 +6,26 @@ import numpy as np
 expname = "pn_dsb_04"
 expname = "pn_dsb_dev16"
 expname = "pn_dsb_05"
+expname = "pn_dsb_15"
+
 base_folder = f"/nrs/funke/wolfs2/lisl/experiments/{expname}/03_fast/"
-prediction_file = "/nrs/funke/wolfs2/lisl/datasets/fast_dsb_img_test.zarr"
+prediction_file = "/nrs/funke/wolfs2/lisl/datasets/fast_dsb_coord_test_inference.zarr"
+gt_file = "/nrs/funke/wolfs2/lisl/datasets/fast_dsb_coord_test.zarr"
 
 pred_zarr = zarr.open(prediction_file, "r")
+gt_zarr = zarr.open(gt_file, "r")
 outfile = f"/nrs/funke/wolfs2/lisl/experiments/{expname}/labelvsscore.csv"
 
 with open(outfile, "w") as csv_file:
-    for i in tqdm(range(37)):
+    scores_names = []
+    for postfix in ["", "_foreground=gt"]:
+        for bw in [3,4,5,8]:
+            scores_names.append(f"bandwidth={bw}{postfix}")
+    scores_names = ",".join([str(s) for s in scores_names])
+    csv_file.write(
+        f"nclicks,nimages,{scores_names},folder\n")
+
+    for i in tqdm(range(10)):
         expname_plus_setup = f"{expname}_setup_t{i:04}"
         scores = []
         log_file = f"{base_folder}/setup_t{i:04}/output.log"
@@ -29,15 +41,17 @@ with open(outfile, "w") as csv_file:
         scores = []
 
         nimages = 0
+        if f"inference/{expname_plus_setup}/pn_embedding" not in pred_zarr:
+            continue
+
         for postfix in ["", "_full"]:
             for bw in [3,4,5,8]:
                 scores.append([])
-
                 for idx in tqdm(pred_zarr[f"inference/{expname_plus_setup}/pn_embedding"], leave=False):
                     key = f"inference/{expname_plus_setup}/pn_embedding/{idx}/ms_seg_bw{bw}{postfix}"
                     if key in pred_zarr:
                         predicted_segmentation = pred_zarr[key][:]
-                        gt_segmentation = pred_zarr[f"gt/{idx}"][:]
+                        gt_segmentation = gt_zarr[f"{idx}/gt"][:]
 
                         if postfix=="_full":
                             predicted_segmentation += 1
@@ -57,5 +71,6 @@ with open(outfile, "w") as csv_file:
         csv_file.write(
             f"{nclicks},{nimages},{scores_string},{base_folder}/setup_t{i:04}\n")
         csv_file.flush()
+
 
 

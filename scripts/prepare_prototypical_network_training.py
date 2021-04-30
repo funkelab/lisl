@@ -8,17 +8,21 @@ def run(options,
         lim_clicks_per_instance,
         num_support_tr,
         num_query_tr,
-        classes_per_it_tr,
         epochs,
         skip_limits=False):
 
+    experiment_chapter = "03_fast"
+
     args = options.args
     args += f" --cuda "
-    args += f" --classes_per_it_tr {classes_per_it_tr} "
     if not skip_limits:
         args += f"--lim_images {lim_images} "
         args += f"--lim_clicks_per_instance {lim_clicks_per_instance} "
         args += f"--lim_instances_per_image {lim_instances_per_image} "
+
+    if options.raw_baseline:
+        args += f" --train_on_raw "
+        experiment_chapter = "03_baseline"
 
     args += f'--num_support_tr {num_support_tr} '
     args += f'--num_query_tr {num_query_tr} '
@@ -34,11 +38,12 @@ def run(options,
                       options.script,
                       options.experiment,
                       experiment_number,
-                      experiment_chapter="03_fast",
+                      experiment_chapter=experiment_chapter,
                       clean_up=options.cleanup,
                       arguments=args,
                       ngpu=1,
-                      ncpu=5)
+                      ncpu=15,
+                      queue='gpu_t4')
 
 
 if __name__ == '__main__':
@@ -52,22 +57,23 @@ if __name__ == '__main__':
     p.add('-l', '--experiment_library', help='path to experiment library')
     p.add('-c', '--cleanup', required=False, action='store_true', help='clean up - remove specified train setup')
     p.add('--args', required=False, default="", help='arguments passed to the running script')
-
+    p.add('--raw_baseline', action='store_true')
+    
     options = p.parse_args()
 
     experiment_number = 0
     base_lim_clicks_per_instance = 8
     num_support_tr = 4
     num_query_tr = 4
-    base_epochs = 5
+    base_epochs = 12
     max_images = 447
-    max_instances = 300
+    max_instances = 447
     min_lim_instances_per_image = 2
     min_instances_per_image = 2
     min_lim_images = 1
     max_classes_per_it_tr = 40
 
-    steps = 40
+    steps = 10
     # for lim_images in np.unique(np.logspace(0, np.log10(max_images), base=10, num=steps).astype(int)):
 
     #     classes_per_it_tr = min_instances_per_image
@@ -86,14 +92,12 @@ if __name__ == '__main__':
         np.log10(2), np.log10(max_instances), base=10, num=steps).astype(int))
 
     for lim in instance_limits:
-        classes_per_it_tr = min(lim, max_classes_per_it_tr)
         run(options,
             lim,
             lim,
             base_lim_clicks_per_instance,
             num_support_tr,
             num_query_tr,
-            classes_per_it_tr,
             base_epochs)
         experiment_number += 1
 

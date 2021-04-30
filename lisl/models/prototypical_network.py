@@ -117,3 +117,4 @@ class PrototypicalERFNetwork(nn.Module):
         # print(spatial_instance_embeddings.shape, spatial_instance_embeddings[..., :self.ndim].shape, self.coords.shape, self.coords.dtype)
         spatial_instance_embeddings[:, :self.ndim] += self.coords
         return spatial_instance_embeddings
+
