@@ -33,7 +33,6 @@ import stardist
 from skimage import measure
 from scipy import ndimage
 from skimage.segmentation import watershed
-from skimage.io import imsave
 from lisl.pl.visualizations import vis_anchor_embedding
 from lisl.pl.utils import (adapted_rand, vis, 
     label2color, try_remove, BuildFromArgparse, offset_from_direction)
@@ -47,6 +46,9 @@ from lisl.pl.loss_supervised import SupervisedInstanceEmbeddingLoss
 from torch.optim.lr_scheduler import MultiStepLR
 import h5py
 from lisl.pl.utils import vis, offset_slice, label2color, visnorm
+from vit_pytorch.spatialvit import SpatialViT
+
+torch.autograd.set_detect_anomaly(True)
 
 class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     def __init__(self, loss_name="CPC",
@@ -64,7 +66,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                        temperature_decay=0.99,
                        pretrained_model=False,
                        resnet_size=18,
-                       train_time_augmentation="nothing",
                        val_patch_inference_steps=None,
                        val_patch_inference_downsample=None,
                        loss_direction_vector_file="misc/direction_vectors.npy",
@@ -91,7 +92,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.temperature_decay = temperature_decay
         self.pretrained_model = pretrained_model
         self.resnet_size = resnet_size
-        self.train_time_augmentation = train_time_augmentation
         self.loss_direction_vector_file = loss_direction_vector_file
         self.loss_distances_file = loss_distances_file
 
@@ -128,7 +128,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--regularization', type=float, default=1e-4)
         parser.add_argument('--loss_name', type=str, default="CPC")
         parser.add_argument('--unet_type', type=str, default="gp")
-        parser.add_argument('--train_time_augmentation', type=str, default="nothing")
         parser.add_argument('--lr_milestones', nargs='*', default=[10000, 50000])
         parser.add_argument('--temperature', type=float, default=10)
         parser.add_argument('--temperature_decay', type=float, default=0.99)
@@ -144,105 +143,28 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     def forward(self, x):
         return self.model(x)[1]
 
-    def forward_patches(self, x, abs_coords=None, img=None, augmentation='nothing', vis=False):
+    def forward_patches(self, x, abs_coords, img=None, vis=False):
         # expects input in the shape of
         # x.shape = 
         # (batch, patch_size, channels, patch_width, patch_height)
         b, p, c, pw, ph = x.shape
-
-        if augmentation=='flip':
-            # apply flips and transpose to imput patches
-            inp = x.view(-1, c, pw, ph)
-            inp_tp = inp.transpose(-2, -1).detach()
-            inp_flip = torch.flip(inp, [-2, -1]).detach()
-            inp_tp_flip = torch.flip(inp_tp, [-2, -1]).detach()
-
-            # forward through model
-            out = self.forward(inp)
-            out_tp = self.forward(inp_tp)
-            out_flip = self.forward(inp_flip)
-            out_tp_flip = self.forward(inp_tp_flip)
-
-            # flip and transpose output embeddings
-            shuffle_index = [1, 0] + [_ for _ in range(2, out.shape[-1])]
-            out_tp = out_tp[..., shuffle_index]
-            out_flip[..., :2] *= -1.
-            out_tp_flip[..., :2] *= -1.
-            out_tp_flip = out_tp_flip[..., shuffle_index]
-
-            out = (out + out_tp + out_flip + out_tp_flip) / 4.
-
-        elif augmentation=='rotation':
-
-            with torch.no_grad():
-                inp_r0 = x.view(-1, c, pw, ph)
-                inp_r1 = torch.rot90(inp_r0, 1, [-2, -1]).detach()
-                inp_r2 = torch.rot90(inp_r0, 2, [-2, -1]).detach()
-                inp_r3 = torch.rot90(inp_r0, 3, [-2, -1]).detach()
-
-            # forward through model
-            out_r0 = self.forward(inp_r0)
-            out_r1 = self.forward(inp_r1)
-            out_r2 = self.forward(inp_r2)
-            out_r3 = self.forward(inp_r3)
-
-            # rotate output embeddings
-            shuffle_index = [1, 0] + [_ for _ in range(2, out_r0.shape[-1])]
-            out_r1 = out_r1[..., shuffle_index]
-            out_r1[..., 0] *= -1.
-            out_r2[..., :2] *= -1.
-            out_r3 = out_r3[..., shuffle_index]
-            out_r3[..., 1] *= -1.
-
-            out = (out_r0 + out_r1 + out_r2 + out_r3) / 4.
-            
-        elif augmentation=='rotflip':
-
-            with torch.no_grad():
-                inp_r0 = x.view(-1, c, pw, ph)
-                inp_tp = inp_r0.transpose(-2, -1).detach()
-                inp_flip = torch.flip(inp_r0, [-2, -1]).detach()
-                inp_tp_flip = torch.flip(inp_tp, [-2, -1]).detach()
-                inp_r1 = torch.rot90(inp_r0, 1, [-2, -1]).detach()
-                inp_r2 = torch.rot90(inp_r0, 2, [-2, -1]).detach()
-                inp_r3 = torch.rot90(inp_r0, 3, [-2, -1]).detach()
-
-            # forward through model
-            out_r0 = self.forward(inp_r0)
-            out_r1 = self.forward(inp_r1)
-            out_r2 = self.forward(inp_r2)
-            out_r3 = self.forward(inp_r3)
-            out_tp = self.forward(inp_tp)
-            out_flip = self.forward(inp_flip)
-            out_tp_flip = self.forward(inp_tp_flip)
-
-
-            # rotate output embeddings
-            shuffle_index = [1, 0] + [_ for _ in range(2, out_r0.shape[-1])]
-            out_r1 = out_r1[..., shuffle_index]
-            out_r1[..., 0] *= -1.
-            out_r2[..., :2] *= -1.
-            out_r3 = out_r3[..., shuffle_index]
-            out_r3[..., 1] *= -1.
-
-            out_tp = out_tp[..., shuffle_index]
-            out_flip[..., :2] *= -1.
-            out_tp_flip[..., :2] *= -1.
-            out_tp_flip = out_tp_flip[..., shuffle_index]
-
-            # average embeddings
-            out = (2 * out_r0 + out_r1 + out_r2 + out_r3 + out_tp + out_flip + out_tp_flip) / 8. 
-        else:
-            out = self.forward(x.view(-1, c, pw, ph))
-
-        out = out.view(b, p, self.out_channels)
-        return out
+        z, out_0 = self.model.forward(x.view(-1, c, pw, ph))
+        out_0 = out_0.view(b, p, self.out_channels)
+        if abs_coords is None:
+            return out_0
+        z = z.view(b, p, -1)
+        z, out_1 = self.spatial_transformer(z, out_0 + abs_coords)
+        out_1 = out_1 - abs_coords
+        out_1 = out_1.view(b, p, self.out_channels)
+        return out_0, out_1
 
     def build_models(self):
         self.model = PatchedResnet(self.in_channels,
                                     self.out_channels,
                                     pretrained=self.pretrained_model,
                                     resnet_size=self.resnet_size)
+
+        self.spatial_transformer = SpatialViT(2, self.model.features_in_last_layer, 2, 64)
 
     def build_loss(self, ):
         self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
@@ -258,42 +180,47 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         
         x, patches, abs_coords, patch_matches, mask = batch
 
-        embedding = self.forward_patches(patches,
+        emb_0, emb_1 = self.forward_patches(patches,
                                          abs_coords,
                                          x,
-                                         vis=(self.global_step % 100 == 0),
-                                         augmentation=self.train_time_augmentation)
+                                         vis=(self.global_step % 100 == 0))
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
-
-            if embedding.requires_grad:
+            if emb_1.requires_grad:
                 def log_hook(grad_input):
                     img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
                                               os.pardir,
                                               os.pardir,
                                               "img"))
+                    
                     os.makedirs(img_directory, exist_ok=True)
-                    for b in range(len(embedding)):
-                        for c in range(0, embedding.shape[-1]-1, 2):
-                            vis_anchor_embedding(embedding[b, ..., c:c+2].detach().cpu().numpy(),
+                    for b in range(len(emb_1)):
+                        for c in range(0, emb_1.shape[-1]-1, 2):
+                            vis_anchor_embedding(emb_1[b, ..., c:c+2].detach().cpu().numpy(),
                                 abs_coords[b].detach().cpu().numpy(),
                                 x[b].detach().cpu().numpy(),
                                 grad=-grad_input[b, ..., c:c+2].detach().cpu().numpy(),
                                 output_file=[f"{img_directory}/grad_{self.global_step}_{b}_{c}.jpg"])
                     handle.remove()
 
-                handle = embedding.register_hook(log_hook)
+                handle = emb_1.register_hook(log_hook)
 
 
         # detach masked  boundary patches
-        embedding = ((mask[..., None]).float() * embedding.detach()) + ((~mask[..., None]).float() * embedding)
-        anchor_loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+        emb_1 = ((mask[..., None]).float() * emb_1.detach()) + ((~mask[..., None]).float() * emb_1)
+        emb_0 = ((mask[..., None]).float() * emb_0.detach()) + \
+            ((~mask[..., None]).float() * emb_0)
+        anchor_loss = self.anchor_loss(emb_0, abs_coords, patch_matches)
+        anchor_loss = anchor_loss + \
+            self.anchor_loss(emb_1, abs_coords, patch_matches)
 
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True, prog_bar=True, logger=True)
 
         if self.regularization > 0.:
-            reg_loss = self.regularization * embedding.norm(2, dim=-1).sum()
+            reg_loss = self.regularization * emb_1.norm(2, dim=-1).sum()
+            reg_loss = reg_loss + self.regularization * \
+                emb_0.norm(2, dim=-1).sum()
             loss = anchor_loss + reg_loss
             self.log('reg_loss', reg_loss.detach(), on_step=True, prog_bar=True, logger=True)
         else:
@@ -319,11 +246,12 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                                  ::self.val_patch_inference_downsample]
 
             if self.val_patch_inference_steps is not None:
-                embedding = self.sliced_cpu_forward_patches(patches)
+                embedding = self.sliced_cpu_forward_patches(
+                    patches, abs_coords)
                 abs_coords = abs_coords.cpu()
                 patch_matches = patch_matches.cpu()
             else:
-                embedding = self.forward_patches(patches)
+                _, embedding = self.forward_patches(patches, abs_coords)
 
             loss = self.anchor_loss(embedding, abs_coords, patch_matches)
             self.log('val_anchor_loss', loss.detach(), on_epoch=True, prog_bar=False, logger=True)
@@ -345,7 +273,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
         return [optimizer], [scheduler]
 
-    def sliced_cpu_forward_patches(self, patches):
+    def sliced_cpu_forward_patches(self, patches, abs_coords):
         vpis = self.val_patch_inference_steps
         # apply forward patch on small slices to  
         # reduce memory footprint
@@ -354,7 +282,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         for b in range(patches.shape[0]):
             e_slice = []
             for c in range(0, patches.shape[1], vpis):
-                e_slice.append(self.forward_patches(patches[b:b+1, c:c+vpis]).cpu())
+                e_slice.append(self.forward_patches(patches[b:b+1, c:c+vpis], None).cpu())
             e_slice = torch.cat(e_slice, dim=1)
             embedding.append(e_slice)
         embedding = torch.cat(embedding, dim=0)

@@ -17,7 +17,7 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    for lr in [1e-3]:
+    for lr in [1e-06]:
       for context_distance in [32, 64, 128, 256]:
 
         for unet_type, test_out_shape, test_input_name, hidden_channels in zip(["gp", "dunet", "deeplab"], ["120 120", "256 256", "256 256"], ["x", "input_", "x"], [128, 485, 128]):

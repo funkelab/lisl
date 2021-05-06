@@ -361,7 +361,7 @@ class BuildFromArgparse(object):
         return cls(**datamodule_kwargs)
 
 
-def quantil_normalize(tensor, pmin=3, pmax=99.8, clip=False,
+def quantil_normalize(tensor, pmin=3, pmax=99.8, clip=4.,
                       eps=1e-20, dtype=np.float32, axis=None):
         mi = np.percentile(tensor, pmin, axis=axis, keepdims=True)
         ma = np.percentile(tensor, pmax, axis=axis, keepdims=True)
@@ -378,15 +378,15 @@ def quantil_normalize(tensor, pmin=3, pmax=99.8, clip=False,
         except ImportError:
             x =                   (tensor - mi) / ( ma - mi + eps )
 
-        if clip:
-            x = np.clip(x, 0, 1)
+        if clip is not None:
+            x = np.clip(x, -clip, clip)
 
         return x
 
 class QuantileNormalize(Transform):
     """Percentile-based image normalization 
        (adopted from https://github.com/CSBDeep/CSBDeep/blob/master/csbdeep/utils/utils.py)"""
-    def __init__(self, pmin=0.6, pmax=99.8, clip=False,
+    def __init__(self, pmin=0.6, pmax=99.8, clip=4.,
                        eps=1e-20, dtype=np.float32, 
                        axis=None, **super_kwargs):
         """
@@ -425,7 +425,7 @@ class QuantileNormalizeTorchTransform(object):
             is made.
     """
 
-    def __init__(self, pmin=3, pmax=99.8, clip=False,
+    def __init__(self, pmin=3, pmax=99.8, clip=4.,
                        eps=1e-20, axis=None):
         self.pmin = pmin
         self.pmax = pmax

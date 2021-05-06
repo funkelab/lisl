@@ -142,12 +142,15 @@ class SupervisedLinearSegmentationValidation(Callback, BuildFromArgparse):
                                                       "evaluation",
                                                       f"{pl_module.global_step:08d}"))
         model_save_path = os.path.join(eval_directory, "model.torch")
+        vt_save_path = os.path.join(eval_directory, "model_vt.torch")
         prediction_filename = os.path.join(eval_directory, "embeddings.zarr")
         score_filename = os.path.join(eval_directory, "score.csv")
         try_remove(prediction_filename)
 
         os.makedirs(eval_directory, exist_ok=True)
         torch.save(trainer.model.unet.state_dict(), model_save_path)
+        torch.save(trainer.spatial_transformer.state_dict(), vt_save_path)
+        
 
         dataset = Dataset(self.test_filename, (self.test_ds_name_raw, ))
 
@@ -264,7 +267,7 @@ class AnchorSegmentationValidation(Callback):
             print("seg_score_best_bandwidth", np.mean(self.seg_scores[k]))
             pl_module.log(f"{k}_seg_score", np.mean(self.seg_scores[k]))
 
-    def predict_embedding(self, batch, pl_module, patch_size, augmentation):
+    def predict_embedding(self, batch, pl_module, patch_size):
 
         edim = pl_module.out_channels
 
@@ -289,13 +292,12 @@ class AnchorSegmentationValidation(Callback):
                 # patches.shape = (batch_size, num_patches, 2, patch_width, patch_height)
                 b, p, c, pw, ph = patches.shape
 
-                patches = patches.cuda()
-                pred_i = pl_module.forward_patches(patches, augmentation=augmentation)
-
-                # turn into absolute embeddings
+                patches = patches.contiguous().cuda()
                 coordinates = torch.stack((torch.arange(x.shape[-1]).float(),
                                            i * torch.ones((x.shape[-1], )).float()), dim=-1)[None]
-                coordinates = coordinates.to(pred_i.device)
+                coordinates = coordinates.to(patches.device)
+
+                pred_i = pl_module.forward_patches(patches, coordinates)[1]
                 pred_i_abs = pl_module.anchor_loss.absoute_embedding(pred_i, coordinates)
                 abs_edim = pred_i_abs.shape[-1]
                 if embedding is None:
@@ -309,12 +311,11 @@ class AnchorSegmentationValidation(Callback):
 
         return embedding, embedding_relative
 
-    def create_eval_dir(self, pl_module, augmentation):
+    def create_eval_dir(self, pl_module):
         eval_directory = os.path.abspath(os.path.join(pl_module.logger.log_dir,
                                                       os.pardir,
                                                       os.pardir,
                                                       "evaluation",
-                                                      augmentation,
                                                       f"{pl_module.global_step:08d}"))
 
         os.makedirs(eval_directory, exist_ok=True)
@@ -477,16 +478,15 @@ class AnchorSegmentationValidation(Callback):
                 print(f'writing {filename}_{b}_{k}.jpg')
                 self.visualize_segmentation(seg, x[b], f'{filename}_{b}_{k}.jpg')
 
-    def full_evaluation(self, trainer, pl_module, batch, batch_idx, dataloader_idx, augmentation):
+    def full_evaluation(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
 
         x, patches, abs_coords, patch_matches, mask, y = batch
 
-        eval_directory = self.create_eval_dir(pl_module, augmentation)
+        eval_directory = self.create_eval_dir(pl_module)
 
         embedding, embedding_relative = self.predict_embedding(batch,
                                                                pl_module,
-                                                               trainer.datamodule.patch_size,
-                                                               augmentation)
+                                                               trainer.datamodule.patch_size)
         
         vis_pointer_filename = f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}"
         vis_embedding_filename = f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}"
@@ -503,7 +503,7 @@ class AnchorSegmentationValidation(Callback):
             ms_bandwidths = (1, 2, 4) + tuple(np.arange(5., 30., 10.))
             ms_seg = self.meanshift_segmentation(embedding, ms_bandwidths)
 
-            evaluation_key = f"meanshift_{augmentation}"
+            evaluation_key = f"meanshift"
             seg_score = self.log_SEG_score(ms_seg, y, evaluation_key=evaluation_key)
             self.write_segmentation_to_zarr(ms_seg, "meanshift", z_array)
             self.visualizalize_segmentation_dict(ms_seg, x, f'{eval_directory}/meanshift_seg_{batch_idx}_{pl_module.local_rank}')
@@ -513,14 +513,13 @@ class AnchorSegmentationValidation(Callback):
 
             mws_seg = self.mws_segmentation(embedding, temperatures, foreground_mask=foreground_mask,
                                             img_dir_and_prefix=(eval_directory, f"{batch_idx}_{pl_module.local_rank}"))
-            evaluation_key = f"MWS_{augmentation}"
-            seg_score = self.log_SEG_score(mws_seg, y, evaluation_key=f"MWS_{augmentation}")
+            evaluation_key = f"MWS"
+            seg_score = self.log_SEG_score(mws_seg, y, evaluation_key=f"MWS")
             self.write_segmentation_to_zarr(mws_seg, "MWS", z_array)
             self.visualizalize_segmentation_dict(mws_seg, x, f'{eval_directory}/mws_seg_{batch_idx}_{pl_module.local_rank}')
 
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
-        for augmentation in ["noaugmentation"]:
-            self.full_evaluation(trainer, pl_module, batch, batch_idx, dataloader_idx, augmentation)
+        self.full_evaluation(trainer, pl_module, batch, batch_idx, dataloader_idx)
 
 class AnchorMeanshift():
     def __init__(self, bandwidth, reduction_probability = 0.05):

@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 from lisl.pl.dataset import (PatchedDataset, SparseChannelDataset, 
   RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
-  DSBTrainAugmentations, DSBTestAugmentations)
+  DSBTrainAugmentations, DSBTestAugmentations, LargeDataset)
 from torchvision import transforms, datasets
 from lisl.pl.utils import QuantileNormalizeTorchTransform
 
@@ -221,6 +221,20 @@ class AnchorDataModule(pl.LightningDataModule):
 
         return parser
         
+class LargeDataModule(AnchorDataModule):
+
+  def setup_datasets(self):
+    full_ds = LargeDataset(self.dspath)
+    dsb_val = DSBDataset('/nrs/funke/wolfs2/lisl/datasets/dsb')
+
+    full_ds = DSBTrainAugmentations(full_ds,
+                                    scale=self.scale,
+                                    output_shape=self.shape)
+    dsb_val = DSBTestAugmentations(dsb_val,
+                                   scale=self.scale,
+                                   output_shape=(256, 256))
+
+    return full_ds, dsb_val
 
 class DSBDataModule(AnchorDataModule):
 

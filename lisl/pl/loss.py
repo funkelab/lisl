@@ -41,7 +41,6 @@ class AnchorLoss(Module):
     def forward(self, embedding, abs_coords, patch_mask) -> Tensor:
       
         # compute all pairwise distances of anchor embeddings
-        
         dist = self.distance_fn(embedding, abs_coords)
         # dist.shape = (b, p, p)
 

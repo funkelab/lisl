@@ -59,7 +59,7 @@ class PatchedResnet(nn.Module):
 
         assert hasattr(models, f"resnet{resnet_size}")
         model = getattr(models, f"resnet{resnet_size}")(pretrained=pretrained)
-        features_in_last_layer = list(model.children())[-1].in_features        
+        self.features_in_last_layer = list(model.children())[-1].in_features
 
         if in_channels != 3:
             ptweights = model.conv1.weight.mean(dim=1, keepdim=True).data
@@ -75,9 +75,9 @@ class PatchedResnet(nn.Module):
         # see https://arxiv.org/pdf/1906.00910.pdf
         # or https://arxiv.org/pdf/2002.05709.pdf
         self.head = torch.nn.Sequential(
-            nn.Linear(features_in_last_layer, features_in_last_layer),
+            nn.Linear(self.features_in_last_layer, self.features_in_last_layer),
             nn.ReLU(),
-            nn.Linear(features_in_last_layer, out_channels))
+            nn.Linear(self.features_in_last_layer, out_channels))
 
         self.patchsize = 16
         self.add_spatial_dim = False
@@ -129,7 +129,7 @@ class PatchedResnet(nn.Module):
         z = z.reshape(b, -1, z_channels).transpose(2, 1)\
             .view(b, z_channels, out_width, out_height)
 
-        return h,z,
+        return h, z
 
 
 def get_unet_kernels(ndim):

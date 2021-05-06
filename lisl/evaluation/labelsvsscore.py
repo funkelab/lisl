@@ -8,7 +8,7 @@ from EmbedSeg.utils.utils2 import matching
 expname = "pn_dsb_04"
 expname = "pn_dsb_dev16"
 expname = "pn_dsb_05"
-expname = "pn_dsb_22_bgzero"
+expname = "pn_dsb_25"
 
 base_folder = f"/nrs/funke/wolfs2/lisl/experiments/{expname}/03_fast/"
 prediction_file = "/nrs/funke/wolfs2/lisl/datasets/fast_dsb_coord_test_inference.zarr"
@@ -37,8 +37,16 @@ data = {"postfix": [],
 apthreshs = [0.5, 0.75, 0.9]
 for th in apthreshs:
     data[f"mAP{int(th*100)}"] = []
+    data[f"fp{int(th*100)}"] = []
+    data[f"tp{int(th*100)}"] = []
+    data[f"fn{int(th*100)}"] = []
+    data[f"n_true{int(th*100)}"] = []
+    data[f"n_pred{int(th*100)}"] = []
 
-for i in tqdm(range(5)):
+    data[f"precision{int(th*100)}"] = []
+    data[f"recall{int(th*100)}"] = []
+    
+for i in tqdm(range(10)):
     expname_plus_setup = f"{expname}_setup_t{i:04}"
     scores = []
     log_file = f"{base_folder}/setup_t{i:04}/output.log"
@@ -59,7 +67,7 @@ for i in tqdm(range(5)):
 
     for postfix in ["", "_full"]:
         for bw in [3,4,5,8]:
-            for idx in [1]:#tqdm(pred_zarr[f"inference/{expname_plus_setup}/pn_embedding"], leave=False):
+            for idx in tqdm(pred_zarr[f"inference/{expname_plus_setup}/pn_embedding"], leave=False):
                 key = f"inference/{expname_plus_setup}/pn_embedding/{idx}/ms_seg_bw{bw}{postfix}"
                 if key in pred_zarr:
                     predicted_segmentation = pred_zarr[key][:]
@@ -77,19 +85,47 @@ for i in tqdm(range(5)):
                     data["SEG"].append(seg_metric(predicted_segmentation, gt_segmentation))
 
                     for th in apthreshs:
-                        data[f"mAP{int(th*100)}"].append(matching(gt_segmentation,
-                                                                    predicted_segmentation, thresh=th).accuracy)
+                        match = matching(gt_segmentation, predicted_segmentation, thresh=th)
+                        data[f"mAP{int(th*100)}"].append(match.accuracy)
+                        data[f"fp{int(th*100)}"].append(match.fp)
+                        data[f"tp{int(th*100)}"].append(match.tp)
+                        data[f"fn{int(th*100)}"].append(match.fn)
+                        data[f"n_true{int(th*100)}"].append(match.n_true)
+                        data[f"n_pred{int(th*100)}"].append(match.n_pred)
+
+                        data[f"precision{int(th*100)}"].append(match.precision)
+                        data[f"recall{int(th*100)}"].append(match.recall)
+                        # data[f"mAP{int(th*100)}"].append(match.accuracy)
                 else:
                     pass
                     # print("Warning no segmentation found")
 
 df = pd.DataFrame(data)
+print([k for k in data.keys()])
 aggfunc = {'nimage': np.sum, 'SEG': np.mean}
+values = ["nimage", "SEG"]
 for th in apthreshs:
+    values.append(f"mAP{int(th*100)}")
     aggfunc[f"mAP{int(th*100)}"] = np.mean
 
+    values.append(f"precision{int(th*100)}")
+    aggfunc[f"precision{int(th*100)}"] = np.mean
+    values.append(f"recall{int(th*100)}")
+    aggfunc[f"recall{int(th*100)}"] = np.mean
+    
+    values.append(f"fp{int(th*100)}")
+    aggfunc[f"fp{int(th*100)}"] = np.sum
+    values.append(f"tp{int(th*100)}")
+    aggfunc[f"tp{int(th*100)}"] = np.sum
+    values.append(f"fn{int(th*100)}")
+    aggfunc[f"fn{int(th*100)}"] = np.sum
+    values.append(f"n_true{int(th*100)}")
+    aggfunc[f"n_true{int(th*100)}"] = np.sum
+    values.append(f"n_pred{int(th*100)}")
+    aggfunc[f"n_pred{int(th*100)}"] = np.sum
+
 table = pd.pivot_table(df, 
-                        values=["nimage", "SEG", "mAP50", "mAP75", "mAP90"],
+                       values=values,
                        index=["setup", "nclicks"],
                        columns=["postfix", 'bw'],
                        aggfunc=aggfunc)

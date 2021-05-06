@@ -69,10 +69,9 @@ class SupervisedInstanceEmbeddingLoss(Module):
                     self.pull_distance(
                         centroid, instance_embedding, dim_channels, dim_samples)
 
-            pull_loss = pull_loss + (pull_over_instances / len(centroids))
-
             # add push loss between centroids
             if len(centroids) > 1:
+                pull_loss = pull_loss + (pull_over_instances / len(centroids))
                 push_loss = push_loss + self.push_distance(torch.cat(centroids, dim=0),
                                                 dim_channels, dim_samples)
 

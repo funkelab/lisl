@@ -6,6 +6,10 @@ def run(options,
         lim_images,
         lim_instances_per_image,
         lim_clicks_per_instance,
+        initial_temp,
+        initial_lr,
+        regularization,
+        spatial_scaling_factor,
         num_support_tr,
         num_query_tr,
         epochs,
@@ -23,6 +27,11 @@ def run(options,
     if options.raw_baseline:
         args += f" --train_on_raw "
         experiment_chapter = "03_baseline"
+
+    args += f'--initial_temp {initial_temp} '
+    args += f'--learning_rate {initial_lr} '
+    args += f'--regularization {regularization} '
+    args += f'--spatial_scaling_factor {spatial_scaling_factor} '
 
     args += f'--num_support_tr {num_support_tr} '
     args += f'--num_query_tr {num_query_tr} '
@@ -65,7 +74,7 @@ if __name__ == '__main__':
     base_lim_clicks_per_instance = 8
     num_support_tr = 4
     num_query_tr = 4
-    base_epochs = 12
+    base_epochs = 8
     max_images = 447
     max_instances = 447
     min_lim_instances_per_image = 2
@@ -74,31 +83,28 @@ if __name__ == '__main__':
     max_classes_per_it_tr = 40
 
     steps = 10
-    # for lim_images in np.unique(np.logspace(0, np.log10(max_images), base=10, num=steps).astype(int)):
 
-    #     classes_per_it_tr = min_instances_per_image
-    #     run(options,
-    #         lim_images,
-    #         min_lim_instances_per_image,
-    #         base_lim_clicks_per_instance,
-    #         num_support_tr,
-    #         num_query_tr,
-    #         classes_per_it_tr,
-    #         base_epochs)
-
-    #     experiment_number += 1
+    lim = 200
+    temp = 8.
+    lr = 0.003
+    reg = 0.01
+    sf = 1.
 
     instance_limits = np.unique(np.logspace(
         np.log10(2), np.log10(max_instances), base=10, num=steps).astype(int))
 
     for lim in instance_limits:
+
         run(options,
             lim,
             lim,
             base_lim_clicks_per_instance,
+            temp,
+            lr,
+            reg,
+            sf,
             num_support_tr,
             num_query_tr,
             base_epochs)
-        experiment_number += 1
 
-# 
+        experiment_number += 1

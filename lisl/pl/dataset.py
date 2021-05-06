@@ -16,6 +16,13 @@ import os
 from tifffile import imread as tiffread
 from lisl.pl.utils import Patchify, random_offset, QuantileNormalize, Scale
 import torch
+import tifffile
+import h5py
+from PIL import Image
+from random import choice
+import zipfile
+from io import BytesIO
+from os.path import isfile, join
 
 from inferno.io.transform import Compose
 from inferno.io.transform.image import (RandomRotate, ElasticTransform,
@@ -380,6 +387,119 @@ class Bbbc010Dataset(Dataset):
 
     def __len__(self):
         return len(self.X)
+
+
+class LargeDataset(Dataset):
+
+    def __init__(self, root, max_trials=5000):
+        self.root = root
+        self.max_trials = max_trials
+
+    def sample_from_zip(self, filepath):
+        zippedImgs = zipfile.ZipFile(filepath)
+        file_in_zip = choice(zippedImgs.namelist())
+        data = zippedImgs.read(file_in_zip)
+        dataEnc = BytesIO(data)
+        return file_in_zip, dataEnc
+
+    def ignore(self, filename):
+        if filename.startswith("__MACOS"):
+            return True
+        elif filename.endswith("ini"):
+            return True
+        elif "_GT/" in filename:
+            # ignore CTC groundtruth files
+            return True
+        elif "/masks/" in filename:
+            # ignore CTC groundtruth files
+            return True
+        elif filename.endswith("ics"):
+            return True
+        elif filename.endswith("mp4"):
+            return True
+        elif filename.endswith(".DS_Store"):
+            return True
+        elif filename.endswith("tar.gz"):
+            return True
+        elif filename.endswith(".zip"):
+            return True
+        elif filename.endswith(".mat"):
+            return True
+        elif filename.endswith(".db"):
+            return True
+        elif filename.endswith(".txt"):
+            return True
+        elif filename.endswith("/"):
+            return True
+        else:
+            return False
+
+
+    def open_image(self, filename, data):
+        if self.ignore(filename):
+            return None
+        elif filename[-4:] in [".tif", "tiff", ".TIF", "TIFF"]:
+            try:
+                img = tifffile.imread(data)
+            except:
+                return None
+            return img
+        else:
+            try:
+                with Image.open(data) as im:
+                    im = np.array(im)
+                return im
+            except:
+                return None
+
+    def sample_image(self):
+        for trial in range(self.max_trials):
+            folder = choice(os.listdir(self.root))
+            file = choice(os.listdir(join(self.root, folder)))
+            img_file = join(self.root, folder, file)
+            if img_file.endswith("zip"):
+                file_in_zip, data = self.sample_from_zip(img_file)
+                img = self.open_image(file_in_zip, data)
+                if img is not None:
+                    return img
+            elif img_file.endswith("h5"):
+                try:
+                    with h5py.File(img_file, "r") as inarray:
+                        key = choice([k for k in inarray.keys() if "raw" in k])
+                        scale = choice(['s0', 's1', 's2'])
+                        img = np.array(inarray[key][scale][:])
+                    return img
+                except:
+                    pass
+            elif img_file.endswith("tar.gz"):
+                # TODO read tar files
+                pass
+            else:
+                # unknown file
+                pass
+
+        raise ValueError(f'Could not load any images after {self.max_trials} trials')
+
+
+    def slice_to_2d(self, img):
+        if img.ndim == 2:
+            return img
+        else:
+            # find axes with smalles dimension
+            shape = img.shape
+            a = shape.index(min(shape))
+            index = np.random.randint(0, shape[a])
+            # take a random slice along minimum axis
+            return self.slice_to_2d(img.take(index, axis=a))
+
+    def __len__(self):
+        return 10000
+
+    def __getitem__(self, _):
+        img = self.sample_image()
+        img = self.slice_to_2d(img)
+        # return dummy label image
+        return img[None], 0*img
 
 class ShiftDataset(Dataset):
 
