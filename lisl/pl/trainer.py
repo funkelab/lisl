@@ -55,6 +55,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                        unet_type="gp",
                        distance=8,
                        head_layers=4,
+                       vit_depth=8,
                        encoder_layers=2,
                        ndim=2,
                        in_channels=1,
@@ -82,6 +83,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.ndim = ndim
         self.last_val_log = -1
         self.head_layers = head_layers
+        self.vit_depth = vit_depth
         self.encoder_layers = encoder_layers
         self.loss_name = loss_name
         self.unet_type = unet_type
@@ -120,6 +122,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         # parser.add_argument('--n_workers', type=int, default=10)
         parser.add_argument('--head_layers', default=2, type=int)
         parser.add_argument('--encoder_layers', default=2, type=int)
+        parser.add_argument('--vit_depth', type=int, default=3)
         parser.add_argument('--ndim', type=int, default=2)
         parser.add_argument('--out_channels', type=int, default=64)
         parser.add_argument('--distance', type=int, default=8)
@@ -128,7 +131,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--regularization', type=float, default=1e-4)
         parser.add_argument('--loss_name', type=str, default="CPC")
         parser.add_argument('--unet_type', type=str, default="gp")
-        parser.add_argument('--lr_milestones', nargs='*', default=[10000, 50000])
+        parser.add_argument('--lr_milestones', nargs='*', default=[10000, 20000])
         parser.add_argument('--temperature', type=float, default=10)
         parser.add_argument('--temperature_decay', type=float, default=0.99)
         parser.add_argument('--pretrained_model', action='store_true')
@@ -164,7 +167,10 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                     pretrained=self.pretrained_model,
                                     resnet_size=self.resnet_size)
 
-        self.spatial_transformer = SpatialViT(2, self.model.features_in_last_layer, 2, 64)
+        self.spatial_transformer = SpatialViT(2,
+                                              self.model.features_in_last_layer,
+                                              self.vit_depth,
+                                              64)
 
     def build_loss(self, ):
         self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
@@ -186,7 +192,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                          vis=(self.global_step % 100 == 0))
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
-            if emb_1.requires_grad:
+            if emb_0.requires_grad:
                 def log_hook(grad_input):
                     img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
                                               os.pardir,
@@ -194,17 +200,37 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                               "img"))
                     
                     os.makedirs(img_directory, exist_ok=True)
-                    for b in range(len(emb_1)):
-                        for c in range(0, emb_1.shape[-1]-1, 2):
-                            vis_anchor_embedding(emb_1[b, ..., c:c+2].detach().cpu().numpy(),
+                    for b in range(len(emb_0)):
+                        for c in range(0, emb_0.shape[-1]-1, 2):
+                            vis_anchor_embedding(emb_0[b, ..., c:c+2].detach().cpu().numpy(),
                                 abs_coords[b].detach().cpu().numpy(),
                                 x[b].detach().cpu().numpy(),
                                 grad=-grad_input[b, ..., c:c+2].detach().cpu().numpy(),
                                 output_file=[f"{img_directory}/grad_{self.global_step}_{b}_{c}.jpg"])
                     handle.remove()
 
-                handle = emb_1.register_hook(log_hook)
+                handle = emb_0.register_hook(log_hook)
 
+            if emb_1.requires_grad:
+                def log_hook(grad_input):
+                    img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
+                                                                 os.pardir,
+                                                                 os.pardir,
+                                                                 "img"))
+
+                    os.makedirs(img_directory, exist_ok=True)
+                    for b in range(len(emb_1)):
+                        for c in range(0, emb_1.shape[-1]-1, 2):
+                            vis_anchor_embedding(emb_1[b, ..., c:c+2].detach().cpu().numpy(),
+                                                 abs_coords[b].detach(
+                            ).cpu().numpy(),
+                                x[b].detach().cpu().numpy(),
+                                grad=-grad_input[b, ..., c:c +
+                                                 2].detach().cpu().numpy(),
+                                output_file=[f"{img_directory}/vi_grad_{self.global_step}_{b}_{c}.jpg"])
+                    handle.remove()
+
+                handle = emb_1.register_hook(log_hook)
 
         # detach masked  boundary patches
         emb_1 = ((mask[..., None]).float() * emb_1.detach()) + ((~mask[..., None]).float() * emb_1)

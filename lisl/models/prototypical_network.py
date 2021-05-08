@@ -42,12 +42,29 @@ class ERFNetsmooth(ERFNet):
         super().__init__(*args, **kwargs)
         self.head = nn.Sequential(
             torch.nn.Upsample(scale_factor=2,
-                              mode="bilinear",
-                              align_corners=False),
+                              mode="nearest"),
             nn.Conv2d(in_channels=self.head.in_channels,
-                      out_channels=self.head.out_channels,
+                      out_channels=self.head.in_channels,
                       kernel_size=5,
                       padding=2,
+                      bias=True),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=self.head.in_channels,
+                      out_channels=self.head.in_channels,
+                      kernel_size=3,
+                      padding=1,
+                      bias=True),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=self.head.in_channels,
+                      out_channels=self.head.in_channels,
+                      kernel_size=3,
+                      padding=1,
+                      bias=True),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=self.head.in_channels,
+                      out_channels=self.head.out_channels,
+                      kernel_size=3,
+                      padding=1,
                       bias=True))
 
 
@@ -70,39 +87,38 @@ class PrototypicalERFNetwork(nn.Module):
 
         # reduce the number of input dimensions to fit the ERF default parameters
         # the model requires channels[0] >  in_channels
-        self.init_inst_layer = torch.nn.Sequential(
+        self.init_layer = torch.nn.Sequential(
             nn.Conv2d(in_channels, 8, 1),
             torch.nn.ReLU())
 
-        self.init_sem_layer = torch.nn.Sequential(
-            nn.Conv2d(in_channels, 8, 1),
-            torch.nn.ReLU())
+        self.encoder = ERFNetsmooth(channels,
+                                    dilations,
+                                    dropout_rates,
+                                    downs,
+                                    in_channels=8,
+                                    in_size=in_size,
+                                    num_classes=inst_out_channels + self.n_sem_classes)
 
-        self.spatial_instance_encoder = ERFNetsmooth(channels,
-                                                     dilations,
-                                                     dropout_rates,
-                                                     downs,
-                                                     in_channels=8,
-                                                     in_size=in_size,
-                                                     num_classes=inst_out_channels)
-
-        self.semantic_encoder = ERFNetsmooth(channels,
-                                             dilations,
-                                             dropout_rates,
-                                             downs,
-                                             in_channels=8,
-                                             in_size=in_size,
-                                             num_classes=self.n_sem_classes)
-        
         self.coords = None
 
     def forward(self, inputs):
-        z_inst = self.init_inst_layer(inputs)
-        z_sem = self.init_sem_layer(inputs)
-        semantic_embeddings = self.semantic_encoder(z_sem)
-        spatial_instance_embeddings = self.spatial_instance_encoder(z_inst)
-        spatial_instance_embeddings = self.add_coords(spatial_instance_embeddings)
-        return spatial_instance_embeddings, semantic_embeddings
+
+        inputs[:, 0] -= inputs[:, 0].mean(dim=(1, 2), keepdims=True)
+        inputs[:, 1] -= inputs[:, 1].mean(dim=(1, 2), keepdims=True)
+
+        z_init = self.init_layer(inputs)
+        embeddings = self.encoder(z_init)
+        # TODO: update pytorch to use tensor_split
+        # inst, alpha, sem = torch.tensor_split(embeddings, (inst_out_channels, 1, self.n_sem_classes), dim=1)
+        inst = embeddings[:, :self.inst_out_channels]
+        sem = embeddings[:, self.inst_out_channels:]
+
+        inst[:, 0] += inputs[:, 1]
+        inst[:, 1] += inputs[:, 0]
+
+        inst = self.add_coords(inst)
+
+        return inst, sem
 
     def add_coords(self, spatial_instance_embeddings):
         sie = spatial_instance_embeddings
@@ -114,7 +130,7 @@ class PrototypicalERFNetwork(nn.Module):
                 self.coords = torch.stack(self.coords, axis=0)[None]
 
         self.coords = self.coords.to(spatial_instance_embeddings.device)
-        # print(spatial_instance_embeddings.shape, spatial_instance_embeddings[..., :self.ndim].shape, self.coords.shape, self.coords.dtype)
+
         spatial_instance_embeddings[:, :self.ndim] += self.coords
         return spatial_instance_embeddings
 

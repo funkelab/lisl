@@ -22,7 +22,7 @@ for frame in range(30):
     max_dist = 3
     embedding_keys = (f"train/prediction_interm/{frame}", f"train/prediction/{frame}", f"train/raw/{frame}")
 
-    edim = 512 + 32 + 1
+    edim = 512 + 2 + 1
     sdim = 2
 
     model = PrototypicalNetwork(edim, 4, 2)

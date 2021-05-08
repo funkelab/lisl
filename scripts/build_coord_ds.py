@@ -28,6 +28,7 @@ def convert_ds(out_array, gt_array, gt_key, emb_arrays, emb_keys, raw_array, raw
 
         inst_embedding = []
         for emb_zarr_file, emb_key in zip(emb_arrays, emb_keys):
+            print(emb_zarr_file, emb_key)
             emb_zarr = zarr.open(emb_zarr_file, "r")
             emb_key = emb_key
             if emb_zarr[emb_key][img_idx].ndim == 2:

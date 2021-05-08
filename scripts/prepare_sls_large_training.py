@@ -35,7 +35,8 @@ def run(data_module,
     args += f" --max_epochs {max_epochs}"
     args += f" --temperature {temperature}"
     args += f" --temperature_decay {temperature_decay}"
-    args += f" --val_patch_inference_steps 200"
+    args += f" --val_patch_inference_steps 200 "
+    args += f" --lr_milestones 50 100 "
     args += f" --batch_size {batch_size}"
     args += f" --loader_workers {11*ngpu}"
     args += f" --gpu {ngpu}"
@@ -54,6 +55,7 @@ def run(data_module,
                       ngpu=ngpu,
                       ncpu=11*ngpu,
                       queue='gpu_tesla_large')
+                    #   queue='gpu_rtx')
 
 
 if __name__ == '__main__':
@@ -74,7 +76,7 @@ if __name__ == '__main__':
 
     base_lr = 1e-6
     base_patchsize = 16
-    base_regularization = 0.0001
+    base_regularization = 0.001
     base_image_scale = 1.
     base_anchor_radius = 6
     base_temperature = 10.
@@ -87,12 +89,12 @@ if __name__ == '__main__':
     base_positive_radius = 10
     ngpu = 4
     batch_size = 12
-    check_val_every_n_epoch = 20
-    max_epochs = 800
+    check_val_every_n_epoch = 50
+    max_epochs = 300
     dsmodule = "LargeDataModule"
     dspath = "/nrs/funke/wolfs2/lisl/datasets/collection"
     
-    for resnet_size in [101, 152]:
+    for resnet_size in [152]:
         run(data_module=dsmodule,
             dspath=dspath,
             lr=base_lr,

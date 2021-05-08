@@ -83,7 +83,6 @@ if __name__ == '__main__':
     max_classes_per_it_tr = 40
 
     steps = 10
-
     lim = 200
     temp = 8.
     lr = 0.003
