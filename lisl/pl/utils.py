@@ -495,9 +495,11 @@ class SaveModelOnValidation(Callback):
                                                       "models"))
         os.makedirs(model_directory, exist_ok=True)
 
-        model_save_path = os.path.join(model_directory, f"model_{pl_module.global_step:08d}.torch")
+        model_save_path = os.path.join(model_directory, f"model_{pl_module.global_step:08d}_{pl_module.local_rank:02}.torch")
         torch.save({"model_state_dict":pl_module.model.state_dict()}, model_save_path)
 
-        vit_model_save_path = os.path.join(model_directory, f"vit_model_{pl_module.global_step:08d}.torch")
-        torch.save(
-            {"model_state_dict": pl_module.spatial_transformer.state_dict()}, vit_model_save_path)
+        if pl_module.spatial_transformer is not None:
+            vit_model_save_path = os.path.join(
+                model_directory, f"vit_model_{pl_module.global_step:08d}_{pl_module.local_rank:02}.torch")
+            torch.save(
+                {"model_state_dict": pl_module.spatial_transformer.state_dict()}, vit_model_save_path)

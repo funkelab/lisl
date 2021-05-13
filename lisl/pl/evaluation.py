@@ -297,7 +297,7 @@ class AnchorSegmentationValidation(Callback):
                                            i * torch.ones((x.shape[-1], )).float()), dim=-1)[None]
                 coordinates = coordinates.to(patches.device)
 
-                pred_i = pl_module.forward_patches(patches, coordinates)[1]
+                pred_i, _ = pl_module.forward_patches(patches, coordinates)
                 pred_i_abs = pl_module.anchor_loss.absoute_embedding(pred_i, coordinates)
                 abs_edim = pred_i_abs.shape[-1]
                 if embedding is None:

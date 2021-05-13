@@ -122,7 +122,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         # parser.add_argument('--n_workers', type=int, default=10)
         parser.add_argument('--head_layers', default=2, type=int)
         parser.add_argument('--encoder_layers', default=2, type=int)
-        parser.add_argument('--vit_depth', type=int, default=3)
+        parser.add_argument('--vit_depth', type=int, default=0)
         parser.add_argument('--ndim', type=int, default=2)
         parser.add_argument('--out_channels', type=int, default=64)
         parser.add_argument('--distance', type=int, default=8)
@@ -153,8 +153,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         b, p, c, pw, ph = x.shape
         z, out_0 = self.model.forward(x.view(-1, c, pw, ph))
         out_0 = out_0.view(b, p, self.out_channels)
-        if abs_coords is None:
-            return out_0
+        if abs_coords is None or self.spatial_transformer is None:
+            return out_0, None
         z = z.view(b, p, -1)
         z, out_1 = self.spatial_transformer(z, out_0 + abs_coords)
         out_1 = out_1 - abs_coords
@@ -167,10 +167,12 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                     pretrained=self.pretrained_model,
                                     resnet_size=self.resnet_size)
 
-        self.spatial_transformer = SpatialViT(2,
-                                              self.model.features_in_last_layer,
-                                              self.vit_depth,
-                                              64)
+        self.spatial_transformer = None
+        if self.vit_depth > 0:
+            self.spatial_transformer = SpatialViT(2,
+                                                self.model.features_in_last_layer,
+                                                self.vit_depth,
+                                                64)
 
     def build_loss(self, ):
         self.validation_loss = SupervisedInstanceEmbeddingLoss(30.)
@@ -187,9 +189,9 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         x, patches, abs_coords, patch_matches, mask = batch
 
         emb_0, emb_1 = self.forward_patches(patches,
-                                         abs_coords,
-                                         x,
-                                         vis=(self.global_step % 100 == 0))
+                                            abs_coords,
+                                            x,
+                                            vis=(self.global_step % 100 == 0))
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
             if emb_0.requires_grad:
@@ -211,7 +213,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
                 handle = emb_0.register_hook(log_hook)
 
-            if emb_1.requires_grad:
+            if emb_1 is not None and emb_1.requires_grad:
                 def log_hook(grad_input):
                     img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
                                                                  os.pardir,
@@ -232,21 +234,24 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
                 handle = emb_1.register_hook(log_hook)
 
+            
         # detach masked  boundary patches
-        emb_1 = ((mask[..., None]).float() * emb_1.detach()) + ((~mask[..., None]).float() * emb_1)
         emb_0 = ((mask[..., None]).float() * emb_0.detach()) + \
             ((~mask[..., None]).float() * emb_0)
         anchor_loss = self.anchor_loss(emb_0, abs_coords, patch_matches)
-        anchor_loss = anchor_loss + \
-            self.anchor_loss(emb_1, abs_coords, patch_matches)
+        if emb_1 is not None:
+            emb_1 = ((mask[..., None]).float() * emb_1.detach()) + ((~mask[..., None]).float() * emb_1)
+            anchor_loss = anchor_loss + \
+                self.anchor_loss(emb_1, abs_coords, patch_matches)
 
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True, prog_bar=True, logger=True)
 
         if self.regularization > 0.:
-            reg_loss = self.regularization * emb_1.norm(2, dim=-1).sum()
-            reg_loss = reg_loss + self.regularization * \
-                emb_0.norm(2, dim=-1).sum()
+            reg_loss = self.regularization * emb_0.norm(2, dim=-1).sum()
+            if emb_1 is not None:
+                reg_loss = reg_loss + self.regularization * \
+                    emb_1.norm(2, dim=-1).sum()
             loss = anchor_loss + reg_loss
             self.log('reg_loss', reg_loss.detach(), on_step=True, prog_bar=True, logger=True)
         else:
@@ -277,7 +282,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                 abs_coords = abs_coords.cpu()
                 patch_matches = patch_matches.cpu()
             else:
-                _, embedding = self.forward_patches(patches, abs_coords)
+                embedding, _ = self.forward_patches(patches, abs_coords)
 
             loss = self.anchor_loss(embedding, abs_coords, patch_matches)
             self.log('val_anchor_loss', loss.detach(), on_epoch=True, prog_bar=False, logger=True)
@@ -296,7 +301,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
     def configure_optimizers(self):
         optimizer = torch.optim.SGD(self.parameters(), lr=self.initial_lr, weight_decay=0.01)
-        scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
+        scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.2)
         return [optimizer], [scheduler]
 
     def sliced_cpu_forward_patches(self, patches, abs_coords):
@@ -308,7 +313,8 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         for b in range(patches.shape[0]):
             e_slice = []
             for c in range(0, patches.shape[1], vpis):
-                e_slice.append(self.forward_patches(patches[b:b+1, c:c+vpis], None).cpu())
+                p, _ = self.forward_patches(patches[b:b+1, c:c+vpis], None)
+                e_slice.append(p.cpu())
             e_slice = torch.cat(e_slice, dim=1)
             embedding.append(e_slice)
         embedding = torch.cat(embedding, dim=0)

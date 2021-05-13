@@ -63,14 +63,8 @@ def predict_and_segment(
 
             # predict output embedding
             sem_key = f"{out_emb_key}/semantic_prediction"
-            inst_init_key = f"{out_emb_key}/initial_inst_embedding"
             inst_key = f"{out_emb_key}/inst_embedding"
 
-
-            inst_init = model.init_inst_layer(input_embedding[None].to(device))[0]
-            out_array.create_dataset(inst_init_key,
-                                     data=inst_init.cpu().numpy(),
-                                     overwrite=True)
             out_array.create_dataset(sem_key,
                                      data=semantic_prediction.cpu().numpy(),
                                      overwrite=True)
@@ -104,7 +98,8 @@ def predict_and_segment(
                 ms_key_full = f"{out_emb_key}/ms_seg_bw{ms_bandwidth}_full"
                 out_array.create_dataset(ms_key_full, data=ms_seg_full, overwrite=True)
                 out_array[ms_key_full].attrs["bandwidth"] = ms_bandwidth
-            
+
+                
 
 
 if __name__ == "__main__":

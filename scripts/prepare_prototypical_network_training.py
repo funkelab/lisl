@@ -51,8 +51,9 @@ def run(options,
                       clean_up=options.cleanup,
                       arguments=args,
                       ngpu=1,
-                      ncpu=15,
-                      queue='gpu_t4')
+                      ncpu=5,
+                      queue='gpu_tesla_large')
+                    #   queue='gpu_t4')
 
 
 if __name__ == '__main__':

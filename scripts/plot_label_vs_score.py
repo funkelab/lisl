@@ -6,7 +6,7 @@ from glob import glob
 from tqdm import tqdm
 import pandas as pd
 
-pattern = f"/nrs/funke/wolfs2/lisl/experiments/pn_dsb_25/labelvsscore.csv"
+pattern = f"/nrs/funke/wolfs2/lisl/experiments/comb_02/labelvsscore.csv"
 
 for fn in glob(pattern):
 # for fn in ["/nrs/funke/wolfs2/lisl/experiments/pn_dsb_14/labelvsscore.csv"]:

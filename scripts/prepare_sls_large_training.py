@@ -36,7 +36,7 @@ def run(data_module,
     args += f" --temperature {temperature}"
     args += f" --temperature_decay {temperature_decay}"
     args += f" --val_patch_inference_steps 200 "
-    args += f" --lr_milestones 50 100 "
+    args += f" --lr_milestones 25 50 75 90 100"
     args += f" --batch_size {batch_size}"
     args += f" --loader_workers {11*ngpu}"
     args += f" --gpu {ngpu}"
@@ -76,7 +76,7 @@ if __name__ == '__main__':
 
     base_lr = 1e-6
     base_patchsize = 16
-    base_regularization = 0.001
+    base_regularization = .1
     base_image_scale = 1.
     base_anchor_radius = 6
     base_temperature = 10.
@@ -89,8 +89,8 @@ if __name__ == '__main__':
     base_positive_radius = 10
     ngpu = 4
     batch_size = 12
-    check_val_every_n_epoch = 50
-    max_epochs = 300
+    check_val_every_n_epoch = 10
+    max_epochs = 120
     dsmodule = "LargeDataModule"
     dspath = "/nrs/funke/wolfs2/lisl/datasets/collection"
     
