@@ -36,6 +36,9 @@ def run(options,
     args += f'--num_support_tr {num_support_tr} '
     args += f'--num_query_tr {num_query_tr} '
 
+    args += f'--num_support_val {num_support_tr} '
+    args += f'--num_query_val {num_query_tr} '
+
     args += f"--epochs {epochs} "
     args += f"--distance_fn rbf "
     args += f"--experiment_root . "
@@ -72,8 +75,8 @@ if __name__ == '__main__':
     options = p.parse_args()
 
     experiment_number = 0
-    base_lim_clicks_per_instance = 8
-    num_support_tr = 4
+    base_lim_clicks_per_instance = 5
+    num_support_tr = 1
     num_query_tr = 4
     base_epochs = 8
     max_images = 447
@@ -87,12 +90,13 @@ if __name__ == '__main__':
     lim = 200
     temp = 8.
     lr = 0.003
-    reg = 0.01
+    reg = 0.0001
     sf = 1.
 
     instance_limits = np.unique(np.logspace(
         np.log10(2), np.log10(max_instances), base=10, num=steps).astype(int))
 
+    # for reg in [0., 0.0000001, 0.000001, 0.00001, 0.0001, 0.001]:
     for lim in instance_limits:
 
         run(options,

@@ -76,7 +76,7 @@ if __name__ == '__main__':
 
     base_lr = 1e-6
     base_patchsize = 16
-    base_regularization = .1
+    base_regularization = .02
     base_image_scale = 1.
     base_anchor_radius = 6
     base_temperature = 10.

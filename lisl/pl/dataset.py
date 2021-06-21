@@ -1,15 +1,17 @@
-from torch.utils.data.dataset import Dataset
+from torch.utils.data.dataset import Dataset, ConcatDataset
 from torch.utils.data import DataLoader
 from lisl.pl.utils import UpSample, offset_from_direction
 from lisl.pl.utils import AbsolutIntensityAugment
 import gunpowder as gp
 import daisy
+import zarr
 import numpy as np
 import random
 from skimage.io import imsave, imread
 import math
 import pytorch_lightning as pl
 import argparse
+import stardist
 import time
 import logging
 import os
@@ -24,7 +26,7 @@ import zipfile
 from io import BytesIO
 from os.path import isfile, join
 
-from inferno.io.transform import Compose
+from inferno.io.transform import Compose, Transform
 from inferno.io.transform.image import (RandomRotate, ElasticTransform,
   AdditiveGaussianNoise, RandomTranspose, RandomFlip, 
   FineRandomRotations, RandomGammaCorrection, RandomCrop, CenterCrop)
@@ -786,48 +788,83 @@ class PatchedDataset(Dataset):
         else:
             return x, patches, abs_coords, conn_mat, mask
 
+class Threeclass(Transform):
+    """Convert segmentation to 3 class"""
+
+    def __init__(self, inner_distance=4):
+        super().__init__()
+        self.inner_distance = inner_distance
+
+    def tensor_function(self, gt):
+        gt_stardist = stardist.geometry.star_dist(gt[0], n_rays=16)
+        background = gt == 0
+        inner = gt_stardist.min(axis=-1) > self.inner_distance
+        # classes 0: boundaries, 1: inner_cell, 2: background
+        threeclass = (2 * background) + inner
+        return threeclass.astype(np.long)
+
+class ZarrEmbeddingDataset(Dataset):
+    """
+    Attributes
+    ----------
+    ds_file: str
+        File to zarr array that contains dataset
+    """
+
+    def __init__(self,
+                 ds_file,
+                 emb_key,
+                 crop_to=(256, 256)):
+        super().__init__()
+        self.ds_file = ds_file
+        self.ds_data = zarr.open(ds_file, "r")
+        self.emb_key = emb_key
+        self.crop_to = crop_to
+
+    def __len__(self):
+        if not hasattr(self, "_length"):
+            self._length = len(self.ds_data.keys())
+        return self._length
+
+    def __getitem__(self, idx):
+
+        raw = self.ds_data[f"{idx}/raw"][:][None]
+        embedding = self.ds_data[f"{idx}/{self.emb_key}"][0]
+        gt = self.ds_data[f"{idx}/gt"][:][None]
+
+        gt = Threeclass(inner_distance=2)(gt)
+
+        return raw, embedding, gt
+
+class AugmentedZarrEmbeddingDataset(Dataset):
+    def __init__(self,
+                ds_file_prefix,
+                ds_file_postfix,
+                augmentations,
+                emb_key,
+                crop_to=(256, 256)):
+    
+        ds_list = []
+        dsf_files = [f"{ds_file_prefix}{i:02d}{ds_file_postfix}" for i in range(augmentations)]
+        ds_list = [ZarrEmbeddingDataset(dsf,
+                                        emb_key=emb_key,
+                                        crop_to=crop_to) for dsf in dsf_files]
+        self._dataset = ConcatDataset(ds_list)
+
+    def __len__(self):
+        len(self._dataset)
+
+    def __getitem__(self, idx):
+        return self._dataset[idx]
 
 if __name__ == '__main__':
-    # GunpowderDataset("/home/swolf/local/data/17-04-14/preprocessing/array.n5")
 
-    filename = "/cephfs/swolf/swolf/bio-labels/17-04-14/raw/array.n5"
-    filename = "/home/swolf/local/data/17-04-14/preprocessing/array.n5"
-    filename = "/home/swolf/local/data/CTC/BF-C2DL-HSC_original/train/02_train_cropped_256.zarr"
-    filename = "/home/swolf/local/data/tmp/raw.n5"
-    key = "raw"
+    ds = AugmentedZarrEmbeddingDataset(ds_file_prefix="/nrs/funke/wolfs2/lisl/datasets/fast_dsb_coord_aug_",
+                                       ds_file_postfix=".zarr",
+                                       emb_key="interm_cooc_emb",
+                                       augmentations=20)
 
-    # filename = "~/mnt/cephfs/swolf/data/dsb2018/train"
-    filename = Path.home()/"tmp"
-    distance = 10
-
-    folder = "/home/swolf/mnt/janelia/nrs/funke/wolfs2/data/BBBC010/images"
-
-    gs = Bbbc010Dataset(
-        folder,
-        "val"
-        # transforms.ToTensor()
-        )
-    # gs = ShiftDataset(DSBDataset(filename),
-    #                   (256, 256),
-    #                   distance,
-    #                   8,
-    #                   train=True,
-    #                   return_segmentation=False)
-
-    for i in range(10):
-
-        inp = gs[i][0]
-
-
-        print("inp", np.array(inp))
-        # print("target", target.shape)
-
-        for c in range(inp.shape[0]):
-            imsave(f"img_{i}_{c}_s.png", inp[c])
-        # imsave(f"img_{i}_0_t.png", target[0])
-
-        # for z in range(inp.shape[1]):
-        #     vecs = target[0]**2 + target[1]**2
-        #     print(vecs.min(), vecs.max())
-        #     img = np.stack((target[0, z], target[1, z], target[2, z]), axis=-1)
-        #     imsave(f"out_{i}_{z}.png", img)
+    threeclass = ds[1][2]
+    print(threeclass.shape)
+    print(np.unique(threeclass, return_counts=True))
+    imsave("deb.png", threeclass[0])

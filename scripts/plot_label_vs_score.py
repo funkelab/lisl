@@ -6,11 +6,12 @@ from glob import glob
 from tqdm import tqdm
 import pandas as pd
 
-pattern = f"/nrs/funke/wolfs2/lisl/experiments/comb_02/labelvsscore.csv"
+pattern = f"/nrs/funke/wolfs2/lisl/experiments/suppone_01/labelvsscore_sf.csv"
+pattern = f"/nrs/funke/wolfs2/lisl/experiments/comb_05/labelvsscore_sf2.csv"
 
 for fn in glob(pattern):
 # for fn in ["/nrs/funke/wolfs2/lisl/experiments/pn_dsb_14/labelvsscore.csv"]:
-    data = pd.read_csv(fn, header=[0, 1, 2, 3], skipinitialspace=True)
+    data = pd.read_csv(fn, header=[0, 1, 2, 3, 4], skipinitialspace=True)
     print([k for k in data.keys()])
     nclicks_key = [k for k in data.keys() if 'nclicks' in k][0]
 
@@ -30,6 +31,7 @@ for fn in glob(pattern):
             # print([k for k in data.keys() if any([_==full for _ in k]))
             fig = data.plot(x=nclicks_key, y=y, logx=True, ax=f.gca())
             plt.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
+            plt.xlabel("number of clicks")
             fig.figure.savefig(outfile, bbox_inches='tight')
 
     # outfile = f'/nrs/funke/wolfs2/lisl/experiments/tables/' + fn.split('/')[-2] + ".png"

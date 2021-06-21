@@ -52,6 +52,11 @@ def predict_and_segment(
             else:
                 out_array.create_group(out_emb_key)
 
+            if in_emb_key not in in_array:
+                print(f"can not find {in_emb_key} in {zarr_in_path}") 
+                print(f"keys {[k for k in in_array.keys()]}")
+                continue
+
             input_embedding = in_array[in_emb_key][:]
             emb_channels, width, height = input_embedding.shape
 
