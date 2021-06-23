@@ -59,9 +59,6 @@ class InteractiveSegmentation:
             #         # disable that behavior, as the highlight gets in the way
             #         layer.selected_data = {}
 
-            import pdb
-            pdb.set_trace()
-
             # # save the current segmentation
             @viewer.bind_key('s')
             def segment(viewer):

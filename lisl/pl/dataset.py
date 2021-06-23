@@ -21,6 +21,7 @@ import torch
 import tifffile
 import h5py
 from PIL import Image
+from torchvision.utils import make_grid
 from random import choice
 import zipfile
 from io import BytesIO
@@ -796,7 +797,7 @@ class Threeclass(Transform):
         self.inner_distance = inner_distance
 
     def tensor_function(self, gt):
-        gt_stardist = stardist.geometry.star_dist(gt[0], n_rays=16)
+        gt_stardist = stardist.geometry.star_dist(gt, n_rays=8)
         background = gt == 0
         inner = gt_stardist.min(axis=-1) > self.inner_distance
         # classes 0: boundaries, 1: inner_cell, 2: background
@@ -819,7 +820,8 @@ class ZarrEmbeddingDataset(Dataset):
         self.ds_file = ds_file
         self.ds_data = zarr.open(ds_file, "r")
         self.emb_key = emb_key
-        self.crop_to = crop_to
+        self.threeclass = Threeclass
+        self.rcrop = RandomCrop(crop_to)
 
     def __len__(self):
         if not hasattr(self, "_length"):
@@ -828,13 +830,24 @@ class ZarrEmbeddingDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        raw = self.ds_data[f"{idx}/raw"][:][None]
-        embedding = self.ds_data[f"{idx}/{self.emb_key}"][0]
-        gt = self.ds_data[f"{idx}/gt"][:][None]
+        while f"{idx}/raw" not in self.ds_data:
+            print(f"Can not find raw[{idx}] in {self.ds_file}")
+            idx = (idx + 1) % self._length
 
-        gt = Threeclass(inner_distance=2)(gt)
+        raw = self.ds_data[f"{idx}/raw"][:][None].astype(np.float32)
+        emb_in = self.ds_data[f"{idx}/{self.emb_key}"]
+        if emb_in.ndim == 2:
+            embedding = emb_in[:][None].astype(np.float32)
+        elif emb_in.ndim == 4:
+            embedding = emb_in[0].astype(np.float32)
+        else:
+            embedding = emb_in[:].astype(np.float32)
 
-        return raw, embedding, gt
+        gt = self.ds_data[f"{idx}/gt"][:]
+        tc = self.threeclass(inner_distance=2)(gt)
+        raw, embedding, tc, gt = self.rcrop(raw, embedding, tc, gt)
+
+        return raw, embedding, tc, gt
 
 class AugmentedZarrEmbeddingDataset(Dataset):
     def __init__(self,
@@ -846,13 +859,17 @@ class AugmentedZarrEmbeddingDataset(Dataset):
     
         ds_list = []
         dsf_files = [f"{ds_file_prefix}{i:02d}{ds_file_postfix}" for i in range(augmentations)]
+
+        # filter non existent datasets
+        dsf_files = [f for f in dsf_files if os.path.exists(f)]
+
         ds_list = [ZarrEmbeddingDataset(dsf,
                                         emb_key=emb_key,
                                         crop_to=crop_to) for dsf in dsf_files]
         self._dataset = ConcatDataset(ds_list)
 
     def __len__(self):
-        len(self._dataset)
+        return len(self._dataset)
 
     def __getitem__(self, idx):
         return self._dataset[idx]
@@ -864,7 +881,18 @@ if __name__ == '__main__':
                                        emb_key="interm_cooc_emb",
                                        augmentations=20)
 
-    threeclass = ds[1][2]
-    print(threeclass.shape)
-    print(np.unique(threeclass, return_counts=True))
-    imsave("deb.png", threeclass[0])
+    
+    idx = 1
+    from tqdm import tqdm
+
+    for idx in tqdm(range(0, 1000)):
+        batch = ds[idx]
+        raw, embedding, tc, target = batch
+        print(idx, np.unique(target))
+        tc_vis = np.stack([tc==0, tc==1, tc==2], axis=-1).astype(np.float32)
+        imsave(f"/nrs/funke/wolfs2/lisl/experiments/dev00/{idx:06}_tc_vis.png", tc_vis)
+        imsave(f"/nrs/funke/wolfs2/lisl/experiments/dev00/{idx:06}_raw.png", raw[0])
+        target_vis = target.astype(np.float32)
+        imsave(f"/nrs/funke/wolfs2/lisl/experiments/dev00/{idx:06}_target_vis.png", target_vis)
+
+    # grid = make_grid(y.detach().cpu().softmax(1)).permute(1, 2, 0).numpy()

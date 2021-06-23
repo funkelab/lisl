@@ -3,8 +3,9 @@ import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
 from lisl.pl.dataset import (PatchedDataset, SparseChannelDataset, 
-  RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
-  DSBTrainAugmentations, DSBTestAugmentations, LargeDataset)
+                             RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
+                             DSBTrainAugmentations, DSBTestAugmentations,
+                             LargeDataset, AugmentedZarrEmbeddingDataset)
 from torchvision import transforms, datasets
 from lisl.pl.utils import QuantileNormalizeTorchTransform
 
@@ -355,5 +356,59 @@ class CelebADataModule(AnchorDataModule):
 
       return dsb_train, dsb_val
 
+
+class ThreeClassDataModule(pl.LightningDataModule):
+
+    def __init__(self, batch_size, ds_file_prefix,
+                 ds_file_postfix, augmentations,
+                 emb_key, loader_workers, crop_to=(256, 256)):
+
+        super().__init__()
+        self.batch_size = batch_size
+        self.ds_file_prefix = ds_file_prefix
+        self.ds_file_postfix = ds_file_postfix
+        self.augmentations = augmentations
+        self.emb_key = emb_key
+        self.crop_to = crop_to
+        self.loader_workers = loader_workers
+
+    def setup(self, stage=None):
+        self.train = AugmentedZarrEmbeddingDataset(self.ds_file_prefix,
+                                                   self.ds_file_postfix,
+                                                   self.augmentations,
+                                                   self.emb_key,
+                                                   self.crop_to)
+
+        self.val = None
+
+    def train_dataloader(self):
+        return DataLoader(self.train,
+                          batch_size=self.batch_size,
+                          num_workers=self.loader_workers,
+                          shuffle=True)
+
+    def val_dataloader(self):
+        return None
+
+    def test_dataloader(self):
+        return None
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = argparse.ArgumentParser(
+            parents=[parent_parser], add_help=False)
+        try:
+            parser.add_argument('--batch_size', type=int, default=8)
+        except argparse.ArgumentError:
+            pass
+
+        parser.add_argument('--loader_workers', type=int, default=8)
+        parser.add_argument('--ds_file_prefix', type=str, required=True)
+        parser.add_argument('--ds_file_postfix', type=str, required=True)
+        parser.add_argument('--augmentations', type=int, required=True)
+        parser.add_argument('--emb_key', type=str, default="interm_cooc_emb")
+        parser.add_argument('--crop_to', default=(256, 256))
+
+        return parser
 
 
