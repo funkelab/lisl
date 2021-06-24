@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from lisl.pl.dataset import (PatchedDataset, SparseChannelDataset, 
                              RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
                              DSBTrainAugmentations, DSBTestAugmentations,
-                             LargeDataset, AugmentedZarrEmbeddingDataset)
+                             LargeDataset, AugmentedZarrEmbeddingDataset, ZarrEmbeddingDataset)
 from torchvision import transforms, datasets
 from lisl.pl.utils import QuantileNormalizeTorchTransform
 
@@ -361,25 +361,34 @@ class ThreeClassDataModule(pl.LightningDataModule):
 
     def __init__(self, batch_size, ds_file_prefix,
                  ds_file_postfix, augmentations,
-                 emb_key, loader_workers, crop_to=(256, 256)):
+                 emb_key, loader_workers, val_ds_file,
+                 test_ds_file, crop_to=(256, 256), min_spatial_div=None):
 
         super().__init__()
         self.batch_size = batch_size
         self.ds_file_prefix = ds_file_prefix
         self.ds_file_postfix = ds_file_postfix
         self.augmentations = augmentations
+        self.min_spatial_div = min_spatial_div
         self.emb_key = emb_key
         self.crop_to = crop_to
         self.loader_workers = loader_workers
+
+        self.val_ds_file = val_ds_file
+        self.test_ds_file = test_ds_file
 
     def setup(self, stage=None):
         self.train = AugmentedZarrEmbeddingDataset(self.ds_file_prefix,
                                                    self.ds_file_postfix,
                                                    self.augmentations,
                                                    self.emb_key,
-                                                   self.crop_to)
+                                                   self.crop_to,
+                                                   self.min_spatial_div)
 
-        self.val = None
+        self.val = ZarrEmbeddingDataset(self.val_ds_file,
+                                        self.emb_key,
+                                        None,
+                                        min_spatial_div=self.min_spatial_div)
 
     def train_dataloader(self):
         return DataLoader(self.train,
@@ -388,10 +397,13 @@ class ThreeClassDataModule(pl.LightningDataModule):
                           shuffle=True)
 
     def val_dataloader(self):
-        return None
+        return DataLoader(self.val,
+                          batch_size=1,
+                          num_workers=1,
+                          shuffle=False)
 
     def test_dataloader(self):
-        return None
+        return None 
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -408,6 +420,9 @@ class ThreeClassDataModule(pl.LightningDataModule):
         parser.add_argument('--augmentations', type=int, required=True)
         parser.add_argument('--emb_key', type=str, default="interm_cooc_emb")
         parser.add_argument('--crop_to', default=(256, 256))
+        parser.add_argument('--min_spatial_div', default=16)
+        parser.add_argument('--val_ds_file', type=str, required=True)
+        parser.add_argument('--test_ds_file', type=str, required=True)
 
         return parser
 

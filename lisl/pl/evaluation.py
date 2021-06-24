@@ -34,7 +34,6 @@ def compute_3class_segmentation(inner, background):
     distance = ndimage.distance_transform_edt(1 - background)
     return watershed(-distance, seeds, mask=1 - background)
 
-
 class SupervisedLinearSegmentationValidation(Callback, BuildFromArgparse):
 
     def __init__(self, test_ds_filename, test_ds_name_raw, test_ds_name_seg, test_out_shape, test_input_name):
@@ -261,7 +260,7 @@ class AnchorSegmentationValidation(Callback):
         """Called when the validation loop begins."""
         self.seg_scores = {}
 
-    def on_validation_epoch_end(self, trainer, pl_module):
+    def on_validation_batch_start(self, trainer, pl_module):
         """Called when the validation loop ends."""
         for k in self.seg_scores:
             print("seg_score_best_bandwidth", np.mean(self.seg_scores[k]))

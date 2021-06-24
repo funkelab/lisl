@@ -815,27 +815,31 @@ class ZarrEmbeddingDataset(Dataset):
     def __init__(self,
                  ds_file,
                  emb_key,
-                 crop_to=(256, 256)):
+                 crop_to=(256, 256),
+                 min_spatial_div=None):
         super().__init__()
         self.ds_file = ds_file
         self.ds_data = zarr.open(ds_file, "r")
         self.emb_key = emb_key
         self.threeclass = Threeclass
-        self.rcrop = RandomCrop(crop_to)
+        self.min_spatial_div = min_spatial_div
+        self.rcrop = RandomCrop(crop_to) if crop_to is not None else None
+        self.image_list = list(self.ds_data.keys())
 
     def __len__(self):
         if not hasattr(self, "_length"):
-            self._length = len(self.ds_data.keys())
+            self._length = len(self.image_list)
         return self._length
 
     def __getitem__(self, idx):
 
-        while f"{idx}/raw" not in self.ds_data:
-            print(f"Can not find raw[{idx}] in {self.ds_file}")
+        while f"{self.image_list[idx]}/raw" not in self.ds_data:
+            print(
+                f"Can not find raw[{self.image_list[idx]}] in {self.ds_file}")
             idx = (idx + 1) % self._length
 
-        raw = self.ds_data[f"{idx}/raw"][:][None].astype(np.float32)
-        emb_in = self.ds_data[f"{idx}/{self.emb_key}"]
+        raw = self.ds_data[f"{self.image_list[idx]}/raw"][:][None].astype(np.float32)
+        emb_in = self.ds_data[f"{self.image_list[idx]}/{self.emb_key}"]
         if emb_in.ndim == 2:
             embedding = emb_in[:][None].astype(np.float32)
         elif emb_in.ndim == 4:
@@ -843,9 +847,21 @@ class ZarrEmbeddingDataset(Dataset):
         else:
             embedding = emb_in[:].astype(np.float32)
 
-        gt = self.ds_data[f"{idx}/gt"][:]
+        gt = self.ds_data[f"{self.image_list[idx]}/gt"][:].astype(np.int32)
         tc = self.threeclass(inner_distance=2)(gt)
-        raw, embedding, tc, gt = self.rcrop(raw, embedding, tc, gt)
+        
+        if self.rcrop is not None:
+            raw, embedding, tc, gt = self.rcrop(raw, embedding, tc, gt)
+        elif self.min_spatial_div is not None:
+            # ensure that the image dimensions are divisible by min_spatial_div
+            # if not, pad all arrays accordingly
+            xdiv = (raw.shape[-1] % self.min_spatial_div)
+            ydiv = (raw.shape[-2] % self.min_spatial_div)
+            if xdiv != 0 or ydiv != 0:
+                raw = np.pad(raw, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
+                gt = np.pad(gt, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
+                embedding = np.pad(embedding, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
+                tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant', constant_values=-100)
 
         return raw, embedding, tc, gt
 
@@ -855,7 +871,8 @@ class AugmentedZarrEmbeddingDataset(Dataset):
                 ds_file_postfix,
                 augmentations,
                 emb_key,
-                crop_to=(256, 256)):
+                crop_to=(256, 256),
+                min_spatial_div=None):
     
         ds_list = []
         dsf_files = [f"{ds_file_prefix}{i:02d}{ds_file_postfix}" for i in range(augmentations)]
@@ -865,7 +882,8 @@ class AugmentedZarrEmbeddingDataset(Dataset):
 
         ds_list = [ZarrEmbeddingDataset(dsf,
                                         emb_key=emb_key,
-                                        crop_to=crop_to) for dsf in dsf_files]
+                                        crop_to=crop_to,
+                                        min_spatial_div=min_spatial_div) for dsf in dsf_files]
         self._dataset = ConcatDataset(ds_list)
 
     def __len__(self):
@@ -881,7 +899,6 @@ if __name__ == '__main__':
                                        emb_key="interm_cooc_emb",
                                        augmentations=20)
 
-    
     idx = 1
     from tqdm import tqdm
 
