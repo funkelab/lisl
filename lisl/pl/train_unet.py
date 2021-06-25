@@ -51,7 +51,6 @@ if __name__ == '__main__':
     #  init trainer
     logger = WandbLogger(project='ThreeClassTraining', entity='swolf')
     trainer = pl.Trainer.from_argparse_args(args, logger=logger)
-    model.logger = logger
     trainer.callbacks.append(checkpoint_callback)
     trainer.callbacks.append(lr_logger)
     trainer.fit(model, datamodule)

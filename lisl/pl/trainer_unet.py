@@ -55,7 +55,6 @@ from lisl.pl.loss_supervised import SupervisedInstanceEmbeddingLoss
 from torch.optim.lr_scheduler import MultiStepLR
 import h5py
 from lisl.pl.utils import vis, offset_slice, label2color, visnorm
-from vit_pytorch.spatialvit import SpatialViT
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -93,10 +92,10 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
     def build_models(self):
         # self.model = UNet(in_channels=self.in_channels,
         #                   num_fmaps=self.out_channels,
-        #                   fmap_inc_factor=8,
-        #                   downsample_factors=[[2, 2], [2, 2]],
-        #                   kernel_size_down=[[[3, 3], [3, 3]]]*3,
-        #                   kernel_size_up=[[[3, 3], [3, 3]]]*2,
+        #                   fmap_inc_factor=64,
+        #                   downsample_factors=[[2, 2], [2, 2], [2, 2]],
+        #                   kernel_size_down=[[[3, 3], [3, 3]]]*4,
+        #                   kernel_size_up=[[[3, 3], [3, 3]]]*3,
         #                   padding='same')
 
         self.model = UNet2d(self.in_channels, self.out_channels, pad_convs=True)
@@ -109,7 +108,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
 
     def build_loss(self, ):
-        self.loss = nn.CrossEntropyLoss(weight=torch.Tensor([10., 1., 1.]))
+        self.loss = nn.CrossEntropyLoss(weight=torch.Tensor([2., 1., 1.]))
 
     def training_step(self, batch, batch_nb):
 

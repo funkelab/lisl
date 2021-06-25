@@ -23,7 +23,7 @@ from sklearn.cluster import MeanShift
 from lisl.pl.visualizations import vis_anchor_embedding
 import skimage
 from embeddingutils.affinities import embedding_to_affinities
-from affogato.segmentation import compute_mws_clustering, compute_mws_segmentation
+# from affogato.segmentation import compute_mws_clustering, compute_mws_segmentation
 
 from PIL import Image
 import matplotlib

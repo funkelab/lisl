@@ -833,9 +833,9 @@ class ZarrEmbeddingDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        while f"{self.image_list[idx]}/raw" not in self.ds_data:
+        while f"{self.image_list[idx]}/{self.emb_key}" not in self.ds_data:
             print(
-                f"Can not find raw[{self.image_list[idx]}] in {self.ds_file}")
+                f"Can not find {self.emb_key}[{self.image_list[idx]}] in {self.ds_file}")
             idx = (idx + 1) % self._length
 
         raw = self.ds_data[f"{self.image_list[idx]}/raw"][:][None].astype(np.float32)
