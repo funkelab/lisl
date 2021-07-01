@@ -1,5 +1,5 @@
 from torch.utils.data.dataset import Dataset, ConcatDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from lisl.pl.utils import UpSample, offset_from_direction
 from lisl.pl.utils import AbsolutIntensityAugment
 import gunpowder as gp
@@ -814,13 +814,14 @@ class ZarrEmbeddingDataset(Dataset):
 
     def __init__(self,
                  ds_file,
-                 emb_key,
+                 emb_keys,
                  crop_to=(256, 256),
                  min_spatial_div=None):
         super().__init__()
         self.ds_file = ds_file
+        print(ds_file)
         self.ds_data = zarr.open(ds_file, "r")
-        self.emb_key = emb_key
+        self.emb_keys = emb_keys
         self.threeclass = Threeclass
         self.min_spatial_div = min_spatial_div
         self.rcrop = RandomCrop(crop_to) if crop_to is not None else None
@@ -831,21 +832,25 @@ class ZarrEmbeddingDataset(Dataset):
             self._length = len(self.image_list)
         return self._length
 
-    def __getitem__(self, idx):
-
-        while f"{self.image_list[idx]}/{self.emb_key}" not in self.ds_data:
-            print(
-                f"Can not find {self.emb_key}[{self.image_list[idx]}] in {self.ds_file}")
-            idx = (idx + 1) % self._length
-
-        raw = self.ds_data[f"{self.image_list[idx]}/raw"][:][None].astype(np.float32)
-        emb_in = self.ds_data[f"{self.image_list[idx]}/{self.emb_key}"]
+    @staticmethod
+    def get_embedding(emb_in):
         if emb_in.ndim == 2:
             embedding = emb_in[:][None].astype(np.float32)
         elif emb_in.ndim == 4:
             embedding = emb_in[0].astype(np.float32)
         else:
             embedding = emb_in[:].astype(np.float32)
+        return embedding
+
+    def __getitem__(self, idx):
+
+        while f"{self.image_list[idx]}/{self.emb_keys[0]}" not in self.ds_data:
+            print(
+                f"Can not find {self.emb_keys[0]}[{self.image_list[idx]}] in {self.ds_file}")
+            idx = (idx + 1) % self._length
+
+        raw = self.ds_data[f"{self.image_list[idx]}/raw"][:][None].astype(np.float32)
+        embedding = np.concatenate([self.get_embedding(self.ds_data[f"{self.image_list[idx]}/{k}"]) for k in self.emb_keys], axis=0)
 
         gt = self.ds_data[f"{self.image_list[idx]}/gt"][:].astype(np.int32)
         tc = self.threeclass(inner_distance=2)(gt)
@@ -870,8 +875,9 @@ class AugmentedZarrEmbeddingDataset(Dataset):
                 ds_file_prefix,
                 ds_file_postfix,
                 augmentations,
-                emb_key,
+                emb_keys,
                 crop_to=(256, 256),
+                limit=None,
                 min_spatial_div=None):
     
         ds_list = []
@@ -881,9 +887,14 @@ class AugmentedZarrEmbeddingDataset(Dataset):
         dsf_files = [f for f in dsf_files if os.path.exists(f)]
 
         ds_list = [ZarrEmbeddingDataset(dsf,
-                                        emb_key=emb_key,
+                                        emb_keys=emb_keys,
                                         crop_to=crop_to,
                                         min_spatial_div=min_spatial_div) for dsf in dsf_files]
+
+        if limit is not None:
+            indices = tuple(range(int(limit)))
+            ds_list = [Subset(ds, indices) for ds in ds_list] 
+
         self._dataset = ConcatDataset(ds_list)
 
     def __len__(self):
@@ -896,7 +907,7 @@ if __name__ == '__main__':
 
     ds = AugmentedZarrEmbeddingDataset(ds_file_prefix="/nrs/funke/wolfs2/lisl/datasets/fast_dsb_coord_aug_",
                                        ds_file_postfix=".zarr",
-                                       emb_key="interm_cooc_emb",
+                                       emb_keys=["interm_cooc_emb"],
                                        augmentations=20)
 
     idx = 1

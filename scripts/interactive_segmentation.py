@@ -2,7 +2,7 @@ import numpy as np
 import h5py
 import napari
 from lisl.pl.evaluation import AnchorSegmentationValidation
-from affogato.segmentation import compute_mws_segmentation
+# from affogato.segmentation import compute_mws_segmentation
 from embeddingutils.affinities import embedding_to_affinities
 from skimage.measure import label as label_cont
 import zarr
