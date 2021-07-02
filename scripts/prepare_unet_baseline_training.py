@@ -3,23 +3,20 @@ import configargparse
 import numpy as np
 import math
 
-def run(options, limit, emb_keys, inchannels, ngpu=1):
+def run(options, limit, emb_keys, outchannels, ngpu=1):
     args = options.args + f" --ds_file_postfix=.zarr "
     args += f" --augmentations 17 "
     args += f" --batch_size 10 "
     args += f" --gpus 1 "
     args += f" --loader_workers 10 "
     if limit is not None:
-        args += f" --max_epochs {int(100 * (450 / limit))} "
         args += f" --ds_limit {limit} "
-        args += f" --check_val_every_n_epoch {int(450 / limit)} "
-    else:
-        args += f" --max_epochs 100 "
-        args += f" --check_val_every_n_epoch 1 "
+    args += f" --max_epochs 100 "
+    args += f" --check_val_every_n_epoch 1 "
 
     args += f" --emb_keys {emb_keys} "
-    args += f" --in_channels {inchannels} "
-    
+    args += f" --in_channels 1 "
+    args += f" --out_channels {outchannels} "    
 
     print(f"setting up {options.base_dir} {experiment_number}")
     set_up_experiment(options.base_dir,
@@ -51,8 +48,8 @@ if __name__ == '__main__':
     options = p.parse_args()
     experiment_number = 0
 
-    for emb_keys, inchannels in zip(["raw train/prediction"], [3]):
+    for emb_keys, outchannels in zip(["train/prediction"], [3+2]):
         for limit in [1, 2, 3, 4, 6, 9, 13, 18, 24, 34, 47, 65, 90, 124, 171, 237, 326, None]:
 
-            run(options, limit, emb_keys, inchannels)
+            run(options, limit, emb_keys, outchannels)
             experiment_number += 1

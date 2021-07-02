@@ -72,6 +72,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.out_channels = out_channels
         self.initial_lr = initial_lr
         self.lr_milestones = list(int(_) for _ in lr_milestones)
+        self.alpha = 0.01
         self.save_hyperparameters()
         self.build_models()
         self.build_loss()
@@ -109,21 +110,32 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
     def build_loss(self, ):
         self.loss = nn.CrossEntropyLoss(weight=torch.Tensor([2., 1., 1.]))
+        self.mse_loss = nn.MSELoss()
 
     def training_step(self, batch, batch_nb):
 
         # ensure that model is in training mode
         self.model.train()
         raw, embedding, target, gt = batch
-        y = self.forward(embedding)
-        loss = self.loss(y, target)
+        y = self.forward(raw)
+        y_tc = y[:, :3]
+        y_emb = y[:, 3:]
+        loss_super = (1 - self.alpha) * self.loss(y_tc, target)
+        loss_distil = self.alpha * self.mse_loss(y_emb, embedding)
 
+        loss = loss_distil + loss_super
         self.log('train/loss', loss.detach(), on_step=True,
                  on_epoch=True, prog_bar=True, logger=True)
-        
-        if self.global_step % 1000 == 0:
+        self.log('train/loss_distil', loss_distil.detach(), on_step=True,
+                 on_epoch=True, prog_bar=True, logger=True)
+        self.log('train/loss_super', loss_super.detach(), on_step=True,
+                 on_epoch=True, prog_bar=True, logger=True)
+
+        if self.global_step % 1000 == 0 or (self.global_step < 1000 and self.global_step % 100 == 0):
             os.makedirs("img", exist_ok=True)
-            pred_grid = make_grid(y.detach().cpu().softmax(1), nrow=len(y)).permute(1, 2, 0).numpy()
+            pred_grid = make_grid(y.detach().cpu()[:, :3].softmax(1), nrow=len(y)).permute(1, 2, 0).numpy()
+            pred_x = make_grid(y.detach().cpu()[:, 3:4], nrow=len(y), normalize=True).permute(1, 2, 0).numpy()
+            pred_y = make_grid(y.detach().cpu()[:, 4:5], nrow=len(y), normalize=True).permute(1, 2, 0).numpy()
             raw_grid = make_grid(raw.detach().cpu(), normalize=True, nrow=len(
                 y), scale_each=True).permute(1, 2, 0).numpy()
             target_grid = make_grid(target.detach().cpu()[:, None].float(), normalize=True, nrow=len(
@@ -131,7 +143,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             gt_stack = torch.stack([torch.from_numpy(label2color(gt.detach().cpu().numpy()[i])) for i in range(len(gt))])
             gt_grid = make_grid(gt_stack, nrow=len(y))[
                 :3].permute(1, 2, 0).numpy()
-            grid = np.concatenate((pred_grid, raw_grid, target_grid, gt_grid), axis=0)
+            grid = np.concatenate((pred_grid, pred_x, pred_y, raw_grid, target_grid, gt_grid), axis=0)
             imsave(f'img/{self.global_step:08}.png', grid)
 
         return {'loss': loss}
@@ -140,19 +152,25 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         # set model to validation mode
         self.model.eval()
-
         raw, embedding, target, gt = batch
-        y = self.forward(embedding)
+        y = self.forward(raw)
+        y_tc = y[:, :3]
+        y_emb = y[:, 3:]
+        loss_super = (1 - self.alpha) * self.loss(y_tc, target)
+        loss_distil = self.alpha * self.mse_loss(y_emb, embedding)
+        loss = loss_distil + loss_super
 
-        loss = self.loss(y, target)
         self.log('val/loss', loss.detach(), on_step=True,
                  on_epoch=True, prog_bar=True, logger=True)
+        self.log('val/loss_distil', loss_distil.detach(), on_step=True,
+                 on_epoch=True, prog_bar=True, logger=True)
+        self.log('val/loss_super', loss_super.detach(), on_step=True,
+                 on_epoch=True, prog_bar=True, logger=True)
 
-        y_amax = y.argmax(1)[0]
+        y_amax = y_tc.argmax(1)[0]
         inner = (y_amax == 1).detach().cpu().numpy()
         background = (y_amax == 2).detach().cpu().numpy()
         y_seg = compute_3class_segmentation(inner, background)
-
 
         # set model back to training mode
         self.model.train()

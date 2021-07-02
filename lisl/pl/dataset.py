@@ -816,6 +816,7 @@ class ZarrEmbeddingDataset(Dataset):
                  ds_file,
                  emb_keys,
                  crop_to=(256, 256),
+                 limit_label_index=None,
                  min_spatial_div=None):
         super().__init__()
         self.ds_file = ds_file
@@ -824,8 +825,12 @@ class ZarrEmbeddingDataset(Dataset):
         self.emb_keys = emb_keys
         self.threeclass = Threeclass
         self.min_spatial_div = min_spatial_div
+        
+        self.limit_label_index = int(limit_label_index) if limit_label_index is not None else None
+
         self.rcrop = RandomCrop(crop_to) if crop_to is not None else None
         self.image_list = list(self.ds_data.keys())
+        self.ignore_index = -100
 
     def __len__(self):
         if not hasattr(self, "_length"):
@@ -852,11 +857,11 @@ class ZarrEmbeddingDataset(Dataset):
         raw = self.ds_data[f"{self.image_list[idx]}/raw"][:][None].astype(np.float32)
         embedding = np.concatenate([self.get_embedding(self.ds_data[f"{self.image_list[idx]}/{k}"]) for k in self.emb_keys], axis=0)
 
-        gt = self.ds_data[f"{self.image_list[idx]}/gt"][:].astype(np.int32)
-        tc = self.threeclass(inner_distance=2)(gt)
+        gt_segmentation = self.ds_data[f"{self.image_list[idx]}/gt"][:].astype(np.int32)
+        tc = self.threeclass(inner_distance=2)(gt_segmentation)
         
         if self.rcrop is not None:
-            raw, embedding, tc, gt = self.rcrop(raw, embedding, tc, gt)
+            raw, embedding, tc, gt_segmentation = self.rcrop(raw, embedding, tc, gt_segmentation)
         elif self.min_spatial_div is not None:
             # ensure that the image dimensions are divisible by min_spatial_div
             # if not, pad all arrays accordingly
@@ -864,11 +869,15 @@ class ZarrEmbeddingDataset(Dataset):
             ydiv = (raw.shape[-2] % self.min_spatial_div)
             if xdiv != 0 or ydiv != 0:
                 raw = np.pad(raw, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
-                gt = np.pad(gt, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
+                gt_segmentation = np.pad(gt_segmentation, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
                 embedding = np.pad(embedding, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
-                tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant', constant_values=-100)
+                tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant', constant_values=self.ignore_index)
 
-        return raw, embedding, tc, gt
+        if self.limit_label_index is not None:
+            if idx >= self.limit_label_index:
+                tc[:] = self.ignore_index
+
+        return raw, embedding, tc, gt_segmentation
 
 class AugmentedZarrEmbeddingDataset(Dataset):
     def __init__(self,
@@ -885,15 +894,11 @@ class AugmentedZarrEmbeddingDataset(Dataset):
 
         # filter non existent datasets
         dsf_files = [f for f in dsf_files if os.path.exists(f)]
-
         ds_list = [ZarrEmbeddingDataset(dsf,
                                         emb_keys=emb_keys,
                                         crop_to=crop_to,
+                                        limit_label_index=limit,
                                         min_spatial_div=min_spatial_div) for dsf in dsf_files]
-
-        if limit is not None:
-            indices = tuple(range(int(limit)))
-            ds_list = [Subset(ds, indices) for ds in ds_list] 
 
         self._dataset = ConcatDataset(ds_list)
 
