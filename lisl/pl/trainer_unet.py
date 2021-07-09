@@ -23,7 +23,7 @@ from stardist.matching import matching, matching_dataset
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
-
+import json
 
 from radam import RAdam
 import time
@@ -90,22 +90,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         return self.model(x)
 
     def build_models(self):
-        # self.model = UNet(in_channels=self.in_channels,
-        #                   num_fmaps=self.out_channels,
-        #                   fmap_inc_factor=64,
-        #                   downsample_factors=[[2, 2], [2, 2], [2, 2]],
-        #                   kernel_size_down=[[[3, 3], [3, 3]]]*4,
-        #                   kernel_size_up=[[[3, 3], [3, 3]]]*3,
-        #                   padding='same')
-
-        self.model = UNet2d(self.in_channels, self.out_channels, pad_convs=True)
-        
-        # self.model = deeplabv3plus_resnet101(num_classes=self.out_channels)
-        # ptweights = self.model.backbone.conv1.weight.mean(dim=1, keepdim=True).data
-        # self.model.backbone.conv1 = nn.Conv2d(self.in_channels, 64, kernel_size=7, padding=3, bias=False)
-        # if self.in_channels == 1:
-        #     self.model.backbone.conv1.weight.data = ptweights
-
+        self.model = UNet2d(self.in_channels, self.out_channels,
+                            pad_convs=True, depth=3)
 
     def build_loss(self, ):
         self.loss = nn.CrossEntropyLoss(weight=torch.Tensor([2., 1., 1.]))
@@ -153,7 +139,6 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         background = (y_amax == 2).detach().cpu().numpy()
         y_seg = compute_3class_segmentation(inner, background)
 
-
         # set model back to training mode
         self.model.train()
         return {'val/loss': loss, "gt": gt[0].detach().cpu().numpy(), "yseg": y_seg}
@@ -192,8 +177,11 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         for t, ms in zip(taus, stats):
             msdict = ms._asdict()
             for k in ('precision', 'recall', 'accuracy', 'f1', 'mean_true_score', 'mean_matched_score', 'panoptic_quality'):
-                self.log(f'val/{k}_{t}', float(msdict[k]), prog_bar=((t in [0.9]) and (k in ['f1'])), logger=True)
-        
+                self.log(f'val/{k}_0p5', float(msdict[k]), prog_bar=((t in [0.5]) and (k in ['f1'])), logger=True)
+
+        stats_dict = dict((t, ms._asdict()) for t, ms in zip(taus, stats))
+        with open(f"val_stats_{self.global_step:012}.json", "w") as stats_out:
+            json.dump(stats_dict, stats_out)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.initial_lr, weight_decay=0.0)

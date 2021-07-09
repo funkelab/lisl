@@ -120,6 +120,8 @@ if __name__ == "__main__":
     parser.add_argument('--intermediate_layer', type=int)
     parser.add_argument('--dataset_raw_key', default="train/raw")
     parser.add_argument('--dataset_prediction_key', default="train/prediction")
+    parser.add_argument('--dataset_intermediate_key', default="interm_cooc_emb")
+    
     parser.add_argument('--default_root_dir', default=None)
     parser.add_argument('--model_input_tensor_name', default="patches")
     parser.add_argument('--model_architecture', default="PatchedResnet")
@@ -140,4 +142,5 @@ if __name__ == "__main__":
         dataset_raw_key=options.dataset_raw_key,
         dataset_prediction_key=options.dataset_prediction_key,
         model_architecture=options.model_architecture,
+        dataset_intermediate_key=options.dataset_intermediate_key,
         model_input_tensor_name=options.model_input_tensor_name)

@@ -51,8 +51,8 @@ if __name__ == '__main__':
     options = p.parse_args()
     experiment_number = 0
 
-    for emb_keys, inchannels in zip(["raw train/prediction"], [3]):
-        for limit in [1, 2, 3, 4, 6, 9, 13, 18, 24, 34, 47, 65, 90, 124, 171, 237, 326, None]:
+    for emb_keys, inchannels in zip(["raw", "raw train/prediction", "raw simclr", "raw train/prediction simclr"], [1, 1+2, 1+32, 1+2+32]):
+        for limit in [1, 2, 4, 9, 18, 34, 65, 124, 237, 326, None]:
 
             run(options, limit, emb_keys, inchannels)
             experiment_number += 1

@@ -10,7 +10,7 @@ class UNet(Model):
             in_channels,
             in_shape,
             num_fmaps,
-            fmap_inc_factors,
+            fmap_inc_factor,
             downsample_factors,
             kernel_size_down,
             kernel_size_up,
@@ -19,15 +19,13 @@ class UNet(Model):
 
         super().__init__()
 
-
         self.unet = funlib.learn.torch.models.UNet(
             in_channels=in_channels,
             num_fmaps=num_fmaps,
-            fmap_inc_factors=fmap_inc_factors,
+            fmap_inc_factor=fmap_inc_factor,
             downsample_factors=downsample_factors,
             kernel_size_down=kernel_size_down,
             kernel_size_up=kernel_size_up,
-            # padding=padding,
             constant_upsample=constant_upsample)
 
         self.dims = len(downsample_factors[0])
