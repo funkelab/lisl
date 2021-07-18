@@ -10,9 +10,42 @@ import lisl
 from lisl.pl.model import PatchedResnet
 from gunpowder.nodes.upsample import UpSample
 from gunpowder.nodes.downsample import DownSample
+from torch.nn.functional import interpolate
+import torch
 
 logger = logging.getLogger(__name__)
 
+class PatchedResnetUpsample(PatchedResnet):
+
+    def set_upsample(self, usfactor):
+        self.usfactor = usfactor
+
+    def forward(self, patches):
+        # patches has to be a Tensor with
+        # patch.shape == (minibatch, channels, patch_width, patch_height)
+        assert len(patches.shape) == 4
+
+        # if a larger image than the patchsize was given
+        if patches.shape[-1] > self.patchsize or patches.shape[-2] > self.patchsize:
+            # divide image into patches and run inference
+            in_shape = patches.shape[-2:]
+            us_patches = interpolate(patches, scale_factor=self.usfactor, mode='bilinear').contiguous()
+            out = self.patch_and_forward(us_patches)
+            out_ds = interpolate(out[1], scale_factor=1/self.usfactor, mode='bilinear')
+            return (out_ds, out_ds)
+
+        h = self.resnet(patches)
+        h = torch.flatten(h, 1)
+        # get output directly after avg pooling layer
+        # h.shape == (minibatch, features_in_last_layer)
+
+        # apply small MLP
+        z = self.head(h)
+        # z.shape = (minibatch, outchannels)
+        if self.add_spatial_dim:
+            return h[..., None, None], z[..., None, None]
+
+        return h, z
 
 def predict_frame(
         in_shape,
@@ -36,7 +69,8 @@ def predict_frame(
 
     # initialize model
     if model_architecture == "PatchedResnet":
-        model = PatchedResnet(1, 2, resnet_size=18)
+        model = PatchedResnetUpsample(1, 2, resnet_size=18)
+        model.set_upsample(upsample)
     elif model_architecture == "unet":
         model = lisl.models.create(model_configfile)
     else:
@@ -49,9 +83,7 @@ def predict_frame(
     in_shape = gp.Coordinate(in_shape)
     out_shape = gp.Coordinate(out_shape)
     raw = gp.ArrayKey(f'RAW_{inference_frame}')
-    raw_us = gp.ArrayKey(f'RAW_UPSAMPLED_{inference_frame}')
     prediction = gp.ArrayKey(f'PREDICTION_{inference_frame}')
-    prediction_ds = gp.ArrayKey(f'PREDICTION_DS_{inference_frame}')
     intermediate_prediction = gp.ArrayKey(f'ITERM_{inference_frame}')
 
     ds_key = f'{inference_frame}/{dataset_raw_key}'
@@ -61,7 +93,7 @@ def predict_frame(
     # build pipeline
     zsource = gp.ZarrSource(input_dataset_file,
                             {raw: ds_key},
-                            {raw: gp.ArraySpec(interpolatable=True, voxel_size=(upsample, upsample))})
+                            {raw: gp.ArraySpec(interpolatable=True, voxel_size=(1, 1))})
 
     pipeline = zsource
     with gp.build(zsource):
@@ -79,31 +111,20 @@ def predict_frame(
         pred_dict[intermediate_layer] = intermediate_prediction
         pred_spec[intermediate_prediction] = gp.ArraySpec(roi=raw_roi)
 
-    if upsample > 1:
-        pipeline += UpSample(raw, upsample, raw_us)
-        netin = raw_us
-    else:
-        netin = raw
-
     pipeline += gp.torch.Predict(
-        model,
-        inputs={model_input_tensor_name: netin},
-        outputs=pred_dict,
-        array_specs=pred_spec,
-        checkpoint=model_checkpoint,
-        spawn_subprocess=True
+       model,
+       inputs={model_input_tensor_name: raw},
+       outputs=pred_dict,
+       array_specs=pred_spec,
+       checkpoint=model_checkpoint,
+       spawn_subprocess=True
     )
-
-    if upsample > 1:
-        pipeline += DownSample(prediction, upsample, prediction_ds)
-    else:
-        prediction_ds = prediction
-
+    
     request = gp.BatchRequest()
     request.add(raw, in_shape)
-    request.add(prediction_ds, out_shape)
+    request.add(prediction, out_shape)
 
-    zarr_dict = {prediction_ds: out_key}
+    zarr_dict = {prediction: out_key}
     if intermediate_layer is not None:
         zarr_dict[intermediate_prediction] = interm_key
         request.add(intermediate_prediction, out_shape)
@@ -115,7 +136,7 @@ def predict_frame(
         compression_type='gzip')
 
     total_request = gp.BatchRequest()
-    total_request[prediction_ds] = gp.ArraySpec(roi=raw_roi)
+    total_request[prediction] = gp.ArraySpec(roi=raw_roi)
     if intermediate_layer is not None:
         total_request[intermediate_prediction] = gp.ArraySpec(roi=raw_roi)
     with gp.build(pipeline):
@@ -134,7 +155,7 @@ if __name__ == "__main__":
     parser.add_argument('--out_filename')
     parser.add_argument('--inference_frame')
     parser.add_argument('--intermediate_layer', type=int, default=None)
-    parser.add_argument('--upsample', type=int, default=1)
+    parser.add_argument('--upsample', type=float, default=1)
     parser.add_argument('--dataset_raw_key', default="train/raw")
     parser.add_argument('--dataset_prediction_key', default="train/prediction")
     parser.add_argument('--dataset_intermediate_key', default="interm_cooc_emb")
