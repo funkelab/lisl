@@ -3,20 +3,16 @@ import configargparse
 import numpy as np
 import math
 
-def run(options, limit, emb_keys, inchannels, ngpu=1):
+def run(options, offset, limit, emb_keys, inchannels, ngpu=1):
     args = options.args + f" --ds_file_postfix=.zarr "
     args += f" --augmentations 17 "
     args += f" --batch_size 10 "
     args += f" --gpus 1 "
-    args += f" --loader_workers 10 "
+    args += f" --loader_workers 5 "
     if limit is not None:
-        args += f" --max_epochs {int(100 * (450 / limit))} "
-        args += f" --ds_limit {limit} "
-        args += f" --check_val_every_n_epoch {int(450 / limit)} "
-    else:
-        args += f" --max_epochs 100 "
-        args += f" --check_val_every_n_epoch 1 "
+        args += f" --ds_limit {offset} {offset + limit} "
 
+    args += f" --max_steps 40000 "
     args += f" --emb_keys {emb_keys} "
     args += f" --in_channels {inchannels} "
     
@@ -50,9 +46,25 @@ if __name__ == '__main__':
 
     options = p.parse_args()
     experiment_number = 0
+    offset_dict = {1:[1 * i for i in range(10)],
+                   2:[2 * i for i in range(8)],
+                   4:[4 * i for i in range(8)],
+                   9:[9 * i for i in range(5)],
+                   18:[18 * i for i in range(3)],
+                   34:[34 * i for i in range(3)],
+                   65:[65 * i for i in range(3)],
+                   124:[0, 124, 124*2],
+                   237:[0, 100, 200],
+                   326:[0, 445-326],
+                   None:[0]}
 
-    for emb_keys, inchannels in zip(["raw", "raw train/prediction", "raw simclr", "raw train/prediction simclr"], [1, 1+2, 1+32, 1+2+32]):
+    keys_and_channels = {"raw": 1,
+                      "raw train/prediction cooc_up1.25 cooc_up1.5 cooc_up1.75 cooc_up2.0 cooc_up3.0 cooc_up4.0": 15,
+                      "raw simclr": 1+32,
+                      "raw train/prediction cooc_up1.25 cooc_up1.5 cooc_up1.75 cooc_up2.0 cooc_up3.0 cooc_up4.0 simclr": 1+14+32}
+
+    for emb_keys, inchannels in keys_and_channels.items():
         for limit in [1, 2, 4, 9, 18, 34, 65, 124, 237, 326, None]:
-
-            run(options, limit, emb_keys, inchannels)
-            experiment_number += 1
+            for offset in offset_dict[limit]:
+                run(options, offset, limit, emb_keys, inchannels)
+                experiment_number += 1

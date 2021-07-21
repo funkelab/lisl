@@ -1,4 +1,3 @@
-from visualizations import vis_anchor_embedding
 from torch.nn.modules.module import Module
 import torch
 from torch import Tensor

@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.ndimage.morphology import distance_transform_edt
+from scipy.ndimage.segmentation import distance_transform_edt
 import zarr
 import argparse
 from tqdm import tqdm

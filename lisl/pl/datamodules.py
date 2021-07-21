@@ -388,9 +388,9 @@ class ThreeClassDataModule(pl.LightningDataModule):
                                                    limit=self.limit,
                                                    min_spatial_div=self.min_spatial_div)
 
-        self.val = ZarrEmbeddingDataset(self.val_ds_file,
+        self.test = ZarrEmbeddingDataset(self.test_ds_file,
                                         self.emb_keys,
-                                        None,
+                                        crop_to=None,
                                         min_spatial_div=self.min_spatial_div)
 
     def train_dataloader(self):
@@ -398,15 +398,16 @@ class ThreeClassDataModule(pl.LightningDataModule):
                           batch_size=self.batch_size,
                           num_workers=self.loader_workers,
                           shuffle=True)
-
+    
     def val_dataloader(self):
-        return DataLoader(self.val,
+        return None 
+
+    def test_dataloader(self):
+        return DataLoader(self.test,
                           batch_size=1,
                           num_workers=1,
                           shuffle=False)
 
-    def test_dataloader(self):
-        return None 
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -424,9 +425,9 @@ class ThreeClassDataModule(pl.LightningDataModule):
         parser.add_argument('--emb_keys', type=str, required=True, nargs='+')
         parser.add_argument('--crop_to', default=(256, 256))
         parser.add_argument('--min_spatial_div', default=16)
-        parser.add_argument('--ds_limit', default=None)
-        parser.add_argument('--val_ds_file', type=str, required=True)
-        parser.add_argument('--test_ds_file', type=str)
+        parser.add_argument('--ds_limit', default=None, type=int, nargs='+')
+        parser.add_argument('--val_ds_file', type=str)
+        parser.add_argument('--test_ds_file', type=str, required=True)
 
         return parser
 

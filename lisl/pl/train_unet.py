@@ -43,12 +43,10 @@ if __name__ == '__main__':
     lr_logger = LearningRateMonitor(logging_interval='step')
 
     checkpoint_callback = ModelCheckpoint(
-        monitor='val/f1_0p5',
         dirpath='models',
-        mode='max',
         save_last=True,
         every_n_train_steps=10000,
-        filename='unet-{epoch}-{val_f1_0p5:.8f}'
+        filename='unet-{iteration}'
     )
 
     #  init trainer
@@ -57,8 +55,11 @@ if __name__ == '__main__':
     setup = cwd[-1]
     logger = WandbLogger(name=f"{exp_name}_{setup}", 
                          project='ThreeClassTraining',
-                         entity='swolf')
+                         entity='swolf',
+                         log_model=False)
+
     trainer = pl.Trainer.from_argparse_args(args, logger=logger)
     trainer.callbacks.append(checkpoint_callback)
     trainer.callbacks.append(lr_logger)
     trainer.fit(model, datamodule)
+    test_results = trainer.test(ckpt_path=None)

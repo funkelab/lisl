@@ -5,10 +5,14 @@ import zarr
 
 def run(options,
         experiment_number,
-        frame):
+        frame,
+        upsample,
+        key):
 
     args = options.args
     args += f" --inference_frame {frame} "
+    args += f" --upsample {upsample} "
+    args += f" ----dataset_prediction_key {key} "
 
     print(f"setting up {options.base_dir} {experiment_number}")
     set_up_experiment(options.base_dir,
@@ -44,32 +48,36 @@ if __name__ == '__main__':
 
     inargs = options.args
 
-    for aug in range(options.max_aug):
-        print("aug=", aug)
-        zarr_input_path = f"/nrs/funke/wolfs2/lisl/datasets/dsb_train_{aug:02}.zarr"
-        augargs = inargs + f" --input_dataset_file {zarr_input_path} "
-        augargs = augargs + f" --out_filename dsb_train_{aug:02}.zarr "
-        augargs = augargs + f" --out_dir /nrs/funke/wolfs2/lisl/datasets "
-        augargs = augargs + f" --dataset_raw_key raw "
-        options.args = augargs
-        inds = zarr.open(zarr_input_path ,"r")
-        for frame in inds.keys():
-            print("zarr_input_path", zarr_input_path, "frame", frame)
-            run(options,
-                experiment_number,
-                frame=frame)
-        experiment_number += 1
+    # for aug in range(options.max_aug):
+    #     print("aug=", aug)
+    #     zarr_input_path = f"/nrs/funke/wolfs2/lisl/datasets/dsb_train_{aug:02}.zarr"
+    #     augargs = inargs + f" --input_dataset_file {zarr_input_path} "
+    #     augargs = augargs + f" --out_filename dsb_train_{aug:02}.zarr "
+    #     augargs = augargs + f" --out_dir /nrs/funke/wolfs2/lisl/datasets "
+    #     augargs = augargs + f" --dataset_raw_key raw "
+    #     options.args = augargs
+    #     inds = zarr.open(zarr_input_path ,"r")
+    #     for frame in inds.keys():
+    #         print("zarr_input_path", zarr_input_path, "frame", frame)
+    #         run(options,
+    #             experiment_number,
+    #             frame=frame)
+    #     experiment_number += 1
 
-    zarr_input_path = f"/nrs/funke/wolfs2/lisl/datasets/fast_dsb_coord_test.zarr"
+    zarr_input_path = f"/groups/funke/home/wolfs2/local/data/dsb/fast_dsb_coord_test_us2.zarr"
     augargs = inargs + f" --input_dataset_file {zarr_input_path} "
     augargs = augargs + f" --out_filename fast_dsb_coord_test.zarr "
     augargs = augargs + f" --out_dir /nrs/funke/wolfs2/lisl/datasets "
     augargs = augargs + f" --dataset_raw_key raw "
     options.args = augargs
     inds = zarr.open(zarr_input_path ,"r")
-    for frame in inds.keys():
-        print("zarr_input_path", zarr_input_path, "frame", frame)
-        run(options,
-            experiment_number,
-            frame=frame)
-    experiment_number += 1
+    for upsample, key in zip([1.25,  1.5,  1.75,  2.0,  3.0,  4.0],
+                            ["cooc_up1.25"  "cooc_up1.5"  "cooc_up1.75"  "cooc_up2.0"  "cooc_up3.0"  "cooc_up4.0"]):
+        for frame in inds.keys():
+            print("zarr_input_path", zarr_input_path, "frame", frame)
+            run(options,
+                experiment_number,
+                frame=frame,
+                upsample=upsample,
+                key=key)
+        experiment_number += 1

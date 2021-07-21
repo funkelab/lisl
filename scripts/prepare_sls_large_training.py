@@ -94,7 +94,7 @@ if __name__ == '__main__':
     dsmodule = "LargeDataModule"
     dspath = "/nrs/funke/wolfs2/lisl/datasets/collection"
     
-    for resnet_size in [152]:
+    for resnet_size in [101]:
         run(data_module=dsmodule,
             dspath=dspath,
             lr=base_lr,

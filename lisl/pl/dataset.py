@@ -12,6 +12,7 @@ import math
 import pytorch_lightning as pl
 import argparse
 import stardist
+from stardist import fill_label_holes
 import time
 import logging
 import os
@@ -804,6 +805,20 @@ class Threeclass(Transform):
         threeclass = (2 * background) + inner
         return threeclass.astype(np.long)
 
+class StardistTf(Transform):
+    """Convert segmentation to stardist"""
+
+    def __init__(self, n_rays=32):
+        super().__init__()
+        self.n_rays = n_rays
+
+    def tensor_function(self, gt):
+        filled_gt = fill_label_holes()
+        dist = stardist.geometry.star_dist(filled_gt, n_rays=self.n_rays)
+        dist_mask = stardist.utils.edt_prob(filled_gt)
+        dist_and_mask = np.concatenate([dist,dist_mask],axis=0)
+        return dist_and_mask
+
 class ZarrEmbeddingDataset(Dataset):
     """
     Attributes
@@ -815,22 +830,54 @@ class ZarrEmbeddingDataset(Dataset):
     def __init__(self,
                  ds_file,
                  emb_keys,
+                #  target_transform="threeclass",
                  crop_to=(256, 256),
-                 min_spatial_div=None):
+                 min_spatial_div=None,
+                 cache=True):
         super().__init__()
         self.ds_file = ds_file
         print(ds_file)
         self.ds_data = zarr.open(ds_file, "r")
         self.emb_keys = emb_keys
-        self.threeclass = Threeclass
+
+        # if target_transform == 'threeclass':
+        self.target_tf = Threeclass(inner_distance=2)
+        # elif target_transform == 'stardist':
+        #     self.target_tf = StardistTf()
+        # else:
+        #     raise NotImplementedError("can not find target tf for ", target_transform)
+        
         self.min_spatial_div = min_spatial_div
         self.rcrop = RandomCrop(crop_to) if crop_to is not None else None
         self.image_list = list(self.ds_data.keys())
+
+        self.cache = cache
+        self.data_cache = {}
 
     def __len__(self):
         if not hasattr(self, "_length"):
             self._length = len(self.image_list)
         return self._length
+
+    def load_data_from_file(self, idx):
+        
+        while f"{self.image_list[idx]}/{self.emb_keys[0]}" not in self.ds_data:
+            print(
+                f"Can not find {self.emb_keys[0]}[{self.image_list[idx]}] in {self.ds_file}")
+            idx = (idx + 1) % self._length
+
+        raw = self.ds_data[f"{self.image_list[idx]}/raw"][:][None].astype(np.float32)
+        embedding = np.concatenate([self.get_embedding(self.ds_data[f"{self.image_list[idx]}/{k}"]) for k in self.emb_keys], axis=0)
+        gt = self.ds_data[f"{self.image_list[idx]}/gt"][:].astype(np.int32)
+        return raw, embedding, gt
+
+    def get_data(self, idx):
+        if self.cache:
+            if idx not in self.data_cache:
+                self.data_cache[idx] = self.load_data_from_file(idx)
+            return self.data_cache[idx]
+        else:
+            return self.load_data_from_file(idx)
 
     @staticmethod
     def get_embedding(emb_in):
@@ -844,16 +891,8 @@ class ZarrEmbeddingDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        while f"{self.image_list[idx]}/{self.emb_keys[0]}" not in self.ds_data:
-            print(
-                f"Can not find {self.emb_keys[0]}[{self.image_list[idx]}] in {self.ds_file}")
-            idx = (idx + 1) % self._length
-
-        raw = self.ds_data[f"{self.image_list[idx]}/raw"][:][None].astype(np.float32)
-        embedding = np.concatenate([self.get_embedding(self.ds_data[f"{self.image_list[idx]}/{k}"]) for k in self.emb_keys], axis=0)
-
-        gt = self.ds_data[f"{self.image_list[idx]}/gt"][:].astype(np.int32)
-        tc = self.threeclass(inner_distance=2)(gt)
+        raw, embedding, gt = self.get_data(idx)
+        tc = self.target_tf(gt)
         
         if self.rcrop is not None:
             raw, embedding, tc, gt = self.rcrop(raw, embedding, tc, gt)
@@ -876,6 +915,7 @@ class AugmentedZarrEmbeddingDataset(Dataset):
                 ds_file_postfix,
                 augmentations,
                 emb_keys,
+                target_transform="threeclass",
                 crop_to=(256, 256),
                 limit=None,
                 min_spatial_div=None):
@@ -889,10 +929,11 @@ class AugmentedZarrEmbeddingDataset(Dataset):
         ds_list = [ZarrEmbeddingDataset(dsf,
                                         emb_keys=emb_keys,
                                         crop_to=crop_to,
+                                        # target_transform=target_transform,
                                         min_spatial_div=min_spatial_div) for dsf in dsf_files]
 
         if limit is not None:
-            indices = tuple(range(int(limit)))
+            indices = tuple(range(int(limit[0]), int(limit[1])))
             ds_list = [Subset(ds, indices) for ds in ds_list] 
 
         self._dataset = ConcatDataset(ds_list)

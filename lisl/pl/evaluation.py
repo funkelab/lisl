@@ -12,7 +12,7 @@ from sklearn.neighbors import KNeighborsClassifier
 import stardist
 from skimage import measure
 from scipy import ndimage
-from skimage.morphology import watershed
+from skimage.segmentation import watershed
 from skimage.io import imsave
 from lisl.pl.utils import adapted_rand, vis, label2color, try_remove, BuildFromArgparse
 from ctcmetrics.seg import seg_metric

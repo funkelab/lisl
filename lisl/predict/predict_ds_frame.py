@@ -64,7 +64,7 @@ def predict_frame(
         dataset_intermediate_key="interm_cooc_emb",
         model_input_tensor_name="patches",
         model_architecture="PatchedResnet",
-        num_workers=5,
+        num_workers=0,
         upsample=1):
 
     # initialize model

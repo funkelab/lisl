@@ -65,6 +65,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  in_channels,
                  out_channels,
                  initial_lr,
+                #  segmentation_type,
                  lr_milestones=(100)):
 
         super().__init__()
@@ -74,6 +75,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.lr_milestones = list(int(_) for _ in lr_milestones)
         self.save_hyperparameters()
         self.build_models()
+        self.segmentation_type = "threeclass"
         self.build_loss()
 
     @staticmethod
@@ -81,6 +83,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--in_channels', default=512, type=int)
         parser.add_argument('--out_channels', default=3, type=int)
         parser.add_argument('--initial_lr', default=0.0001, type=float)
+        parser.add_argument('--segmentation_type', default="threeclass")
+
         parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
         parser.add_argument('--lr_milestones', nargs='*', default=[10000, 20000])
 
@@ -93,8 +97,11 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.model = UNet2d(self.in_channels, self.out_channels,
                             pad_convs=True, depth=3)
 
-    def build_loss(self, ):
-        self.loss = nn.CrossEntropyLoss(weight=torch.Tensor([2., 1., 1.]))
+    def build_loss(self):
+        if self.segmentation_type == "threeclass":
+            self.loss = nn.CrossEntropyLoss(weight=torch.Tensor([2., 1., 1.]))
+        elif self.segmentation_type == "stardist":
+            self.loss = nn.L1Loss()
 
     def training_step(self, batch, batch_nb):
 
@@ -122,28 +129,24 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         return {'loss': loss}
 
-    def validation_step(self, batch, batch_nb):
-
-        # set model to validation mode
-        self.model.eval()
+    def test_step(self, batch, batch_nb):
 
         raw, embedding, target, gt = batch
         y = self.forward(embedding)
 
         loss = self.loss(y, target)
-        self.log('val/loss', loss.detach(), on_step=True,
-                 on_epoch=True, prog_bar=True, logger=True)
 
         y_amax = y.argmax(1)[0]
         inner = (y_amax == 1).detach().cpu().numpy()
         background = (y_amax == 2).detach().cpu().numpy()
         y_seg = compute_3class_segmentation(inner, background)
 
-        # set model back to training mode
-        self.model.train()
-        return {'val/loss': loss, "gt": gt[0].detach().cpu().numpy(), "yseg": y_seg}
+        return {'test/loss': loss.detach().cpu().numpy(),
+                "gt": gt[0].detach().cpu().numpy(),
+                "yseg": y_seg}
 
-    def validation_epoch_end(self, outs):
+
+    def test_epoch_end(self, outs):
 
         taus = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         stats = [matching_dataset([a['gt'] for a in outs], 
