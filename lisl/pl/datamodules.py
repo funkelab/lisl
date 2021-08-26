@@ -362,8 +362,8 @@ class ThreeClassDataModule(pl.LightningDataModule):
     def __init__(self, batch_size, ds_file_prefix,
                  ds_file_postfix, augmentations,
                  emb_keys, loader_workers, val_ds_file,
-                 test_ds_file, crop_to=(256, 256),
-                 ds_limit=None, min_spatial_div=None):
+                 test_ds_file, target_transform="threeclass", 
+                 crop_to=(256, 256), ds_limit=None, min_spatial_div=None):
 
         super().__init__()
         self.batch_size = batch_size
@@ -372,6 +372,7 @@ class ThreeClassDataModule(pl.LightningDataModule):
         self.augmentations = augmentations
         self.min_spatial_div = min_spatial_div
         self.emb_keys = emb_keys
+        self.target_transform = target_transform
         self.crop_to = crop_to
         self.loader_workers = loader_workers
 
@@ -384,12 +385,14 @@ class ThreeClassDataModule(pl.LightningDataModule):
                                                    self.ds_file_postfix,
                                                    self.augmentations,
                                                    self.emb_keys,
+                                                   target_transform=self.target_transform,
                                                    crop_to=self.crop_to,
                                                    limit=self.limit,
                                                    min_spatial_div=self.min_spatial_div)
 
         self.test = ZarrEmbeddingDataset(self.test_ds_file,
                                         self.emb_keys,
+                                        target_transform=self.target_transform,
                                         crop_to=None,
                                         min_spatial_div=self.min_spatial_div)
 
@@ -423,6 +426,7 @@ class ThreeClassDataModule(pl.LightningDataModule):
         parser.add_argument('--ds_file_postfix', type=str, required=True)
         parser.add_argument('--augmentations', type=int, required=True)
         parser.add_argument('--emb_keys', type=str, required=True, nargs='+')
+        parser.add_argument('--target_transform', type=str)
         parser.add_argument('--crop_to', default=(256, 256))
         parser.add_argument('--min_spatial_div', default=16)
         parser.add_argument('--ds_limit', default=None, type=int, nargs='+')

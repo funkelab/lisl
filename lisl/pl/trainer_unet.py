@@ -19,6 +19,8 @@ from funlib.learn.torch.models import UNet
 from mipnet.models.unet import UNet2d
 from deeplabv3plus.network.modeling import deeplabv3plus_resnet101
 from stardist.matching import matching, matching_dataset
+from stardist.geometry import polygons_to_label
+from stardist import non_maximum_suppression
 
 import matplotlib
 matplotlib.use('agg')
@@ -65,7 +67,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  in_channels,
                  out_channels,
                  initial_lr,
-                #  segmentation_type,
+                 segmentation_type,
                  architecture="unet",
                  model_checkpoint=None,
                  lr_milestones=(100)):
@@ -80,7 +82,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.alpha = 0.01
         self.save_hyperparameters()
         self.build_models()
-        self.segmentation_type = "threeclass"
+        self.segmentation_type = segmentation_type
         self.build_loss()
 
     @staticmethod
@@ -129,8 +131,12 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             pred_grid = make_grid(y.detach().cpu()[:, :3].softmax(1), nrow=len(y)).permute(1, 2, 0).numpy()
             raw_grid = make_grid(raw.detach().cpu(), normalize=True, nrow=len(
                 y), scale_each=True).permute(1, 2, 0).numpy()
-            target_grid = make_grid(target.detach().cpu()[:, None].float(), normalize=True, nrow=len(
-                y), scale_each=True).permute(1, 2, 0).numpy()
+            if self.segmentation_type == "threeclass":
+                target_grid = make_grid(target.detach().cpu()[:, None].float(), normalize=True, nrow=len(
+                    y), scale_each=True).permute(1, 2, 0).numpy()
+            elif self.segmentation_type == "stardist":
+                target_grid = make_grid(target.detach().cpu()[:, :3].float(), normalize=True, nrow=len(
+                    y), scale_each=True).permute(1, 2, 0).numpy()
             gt_stack = torch.stack([torch.from_numpy(label2color(gt.detach().cpu().numpy()[i])) for i in range(len(gt))])
             gt_grid = make_grid(gt_stack, nrow=len(y))[
                 :3].permute(1, 2, 0).numpy()
@@ -143,14 +149,26 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         raw, embedding, target, gt = batch
         y = self.forward(embedding)
-        y_amax = y.argmax(1)[0]
-        inner = (y_amax == 1).detach().cpu().numpy()
-        background = (y_amax == 2).detach().cpu().numpy()
-        y_seg = compute_3class_segmentation(inner, background)
+        if self.segmentation_type == "threeclass":
+            y_amax = y.argmax(1)[0]
+            inner = (y_amax == 1).detach().cpu().numpy()
+            background = (y_amax == 2).detach().cpu().numpy()
+            y_seg = compute_3class_segmentation(inner, background)
+        elif self.segmentation_type == "stardist":
+            # current implementation is not parallelized over batches
+            assert y.shape[0] == 1
+            # y.shape = (batch, nrays+1, width, height)
+            width, height = y.shape[-2:]
+            dist = y[0, :-1].detach().cpu().permute(1,2,0).numpy()
+            prob = y[0, -1].detach().cpu().numpy()
+            print("HHHHHH", dist.shape, prob.shape)
+            points, probi, disti = non_maximum_suppression(dist, prob)
+            y_seg = polygons_to_label(disti, points, prob=probi, shape=(width, height))
+        else:
+            return NotImplementedError()
 
         return {"gt": gt[0].detach().cpu().numpy(),
                 "yseg": y_seg}
-
 
     def test_epoch_end(self, outs):
 

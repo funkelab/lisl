@@ -818,10 +818,11 @@ class StardistTf(Transform):
         self.n_rays = n_rays
 
     def tensor_function(self, gt):
-        filled_gt = fill_label_holes()
+        filled_gt = fill_label_holes(gt)
         dist = stardist.geometry.star_dist(filled_gt, n_rays=self.n_rays)
-        dist_mask = stardist.utils.edt_prob(filled_gt)
-        dist_and_mask = np.concatenate([dist,dist_mask],axis=0)
+        dist_mask = stardist.utils.edt_prob(filled_gt)[None]
+        dist = np.transpose(dist, (2, 0, 1))
+        dist_and_mask = np.concatenate([dist, dist_mask],axis=0)
         return dist_and_mask
 
 class ZarrEmbeddingDataset(Dataset):
@@ -835,7 +836,7 @@ class ZarrEmbeddingDataset(Dataset):
     def __init__(self,
                  ds_file,
                  emb_keys,
-                #  target_transform="threeclass",
+                 target_transform="threeclass",
                  crop_to=(256, 256),
                  limit_label_index=None,
                  min_spatial_div=None,
@@ -846,15 +847,15 @@ class ZarrEmbeddingDataset(Dataset):
         self.ds_data = zarr.open(ds_file, "r")
         self.emb_keys = emb_keys
 
-        # if target_transform == 'threeclass':
-        self.target_tf = Threeclass(inner_distance=2)
-        # elif target_transform == 'stardist':
-        #     self.target_tf = StardistTf()
-        # else:
-        #     raise NotImplementedError("can not find target tf for ", target_transform)
+        self.target_transform = target_transform
+        if target_transform == 'threeclass':
+            self.target_tf = Threeclass(inner_distance=2)
+        elif target_transform == 'stardist':
+            self.target_tf = StardistTf()
+        else:
+            raise NotImplementedError("can not find target tf for ", target_transform)
         
         self.min_spatial_div = min_spatial_div
-        
         self.limit_label_index = (int(_) for _ in limit_label_index) if limit_label_index is not None else None
 
         self.rcrop = RandomCrop(crop_to) if crop_to is not None else None
@@ -920,7 +921,12 @@ class ZarrEmbeddingDataset(Dataset):
                 raw = np.pad(raw, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
                 gt_segmentation = np.pad(gt_segmentation, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
                 embedding = np.pad(embedding, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
-                tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant', constant_values=self.ignore_index)
+                if self.target_transform == "stardist":
+                    tc = np.pad(tc, ((0,0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)),
+                                mode='constant', constant_values=0)
+                else:
+                    tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)),
+                                mode='constant', constant_values=self.ignore_index)
 
         return raw, embedding, tc, gt_segmentation
 
@@ -943,7 +949,7 @@ class AugmentedZarrEmbeddingDataset(Dataset):
         ds_list = [ZarrEmbeddingDataset(dsf,
                                         emb_keys=emb_keys,
                                         crop_to=crop_to,
-                                        # target_transform=target_transform,
+                                        target_transform=target_transform,
                                         limit_label_index=limit,
                                         min_spatial_div=min_spatial_div) for dsf in dsf_files]
 
