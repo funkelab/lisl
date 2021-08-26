@@ -4,6 +4,7 @@ import numpy as np
 import math
 
 def run(options, offset, limit, emb_keys, inchannels, ngpu=1):
+
     args = options.args + f" --ds_file_postfix=.zarr "
     args += f" --augmentations 17 "
     args += f" --batch_size 10 "
@@ -11,11 +12,13 @@ def run(options, offset, limit, emb_keys, inchannels, ngpu=1):
     args += f" --loader_workers 5 "
     if limit is not None:
         args += f" --ds_limit {offset} {offset + limit} "
+    args += f" --max_epochs 100 "
+    args += f" --check_val_every_n_epoch 1 "
 
     args += f" --max_steps 40000 "
     args += f" --emb_keys {emb_keys} "
     args += f" --in_channels {inchannels} "
-    
+  
 
     print(f"setting up {options.base_dir} {experiment_number}")
     set_up_experiment(options.base_dir,

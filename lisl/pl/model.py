@@ -457,3 +457,47 @@ class PartialConvUNet3D(UNet):
         with torch.no_grad():
             inp = torch.zeros((2, 2 * self.in_channels, *self.divisibility_constraint), dtype=torch.float32)
             self.forward(inp)
+
+class FNC(nn.Module):
+    
+    def __init__(self, inchannel, outchannel, checkpoint=None):
+        super().__init__()
+        self.model = models.segmentation.fcn_resnet101(num_classes=outchannel)
+
+        # adjust in channels in first convolution
+        ptweights = self.model.backbone.conv1.weight.mean(dim=1, keepdim=True).data
+        self.model.backbone.conv1 = nn.Conv2d(inchannel, 64, kernel_size=7, padding=3, bias=False)
+
+        if checkpoint is not None:
+            self.load_checkpoint(checkpoint)
+
+    def load_checkpoint(self, checkpoint):
+
+        def get_new_key(key):
+            key = key.replace("resnet.0", "backbone.conv1")
+            key = key.replace("resnet.1", "backbone.bn1")
+            if key.startswith("resnet."):
+                index = int(key[7:8]) - 3
+                key = f"{key[:7]}{index}{key[8:]}"
+                assert index >= 0
+                key = key.replace("resnet.", "backbone.layer")
+            
+            key = key.replace("head.0", "classifier.1")
+            key = key.replace("head.2", "classifier.4")
+
+            return key
+
+        tmodel = torch.load(checkpoint)["model_state_dict"]
+
+        for k in list(tmodel.keys()):
+            new_key = get_new_key(k)
+            tmodel[new_key] = tmodel.pop(k)
+
+        for dk in ['classifier.1.weight', 'classifier.1.bias', 'classifier.4.weight', 'classifier.4.bias']:
+            del tmodel[dk]
+
+        self.model.load_state_dict(tmodel, strict=False)
+
+    def forward(self, input):
+        return self.model(input)['out']
+

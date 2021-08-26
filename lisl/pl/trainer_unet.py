@@ -14,7 +14,7 @@ from torch.utils.data.distributed import DistributedSampler
 import random
 
 import pytorch_lightning as pl
-from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet
+from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet, FNC
 from funlib.learn.torch.models import UNet
 from mipnet.models.unet import UNet2d
 from deeplabv3plus.network.modeling import deeplabv3plus_resnet101
@@ -66,13 +66,18 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  out_channels,
                  initial_lr,
                 #  segmentation_type,
+                 architecture="unet",
+                 model_checkpoint=None,
                  lr_milestones=(100)):
 
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.initial_lr = initial_lr
+        self.architecture = architecture
+        self.model_checkpoint = model_checkpoint
         self.lr_milestones = list(int(_) for _ in lr_milestones)
+        self.alpha = 0.01
         self.save_hyperparameters()
         self.build_models()
         self.segmentation_type = "threeclass"
@@ -84,9 +89,10 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--out_channels', default=3, type=int)
         parser.add_argument('--initial_lr', default=0.0001, type=float)
         parser.add_argument('--segmentation_type', default="threeclass")
-
+        parser.add_argument('--architecture', default="unet")
+        parser.add_argument('--model_checkpoint', default=None)
         parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
-        parser.add_argument('--lr_milestones', nargs='*', default=[10000, 20000])
+        parser.add_argument('--lr_milestones', nargs='*', default=[20, 30])
 
         return parser
 
@@ -94,8 +100,12 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         return self.model(x)
 
     def build_models(self):
-        self.model = UNet2d(self.in_channels, self.out_channels,
-                            pad_convs=True, depth=3)
+        if self.architecture == "unet":
+            self.model = UNet2d(self.in_channels, self.out_channels,
+                                pad_convs=True, depth=3)
+        elif self.architecture == "fcn":
+            self.model = FNC(self.in_channels, self.out_channels,
+                             checkpoint=self.model_checkpoint)
 
     def build_loss(self):
         if self.segmentation_type == "threeclass":
@@ -113,10 +123,10 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         self.log('train/loss', loss.detach(), on_step=True,
                  on_epoch=True, prog_bar=True, logger=True)
-        
-        if self.global_step % 1000 == 0:
+
+        if self.global_step % 1000 == 0 or (self.global_step < 1000 and self.global_step % 100 == 0):
             os.makedirs("img", exist_ok=True)
-            pred_grid = make_grid(y.detach().cpu().softmax(1), nrow=len(y)).permute(1, 2, 0).numpy()
+            pred_grid = make_grid(y.detach().cpu()[:, :3].softmax(1), nrow=len(y)).permute(1, 2, 0).numpy()
             raw_grid = make_grid(raw.detach().cpu(), normalize=True, nrow=len(
                 y), scale_each=True).permute(1, 2, 0).numpy()
             target_grid = make_grid(target.detach().cpu()[:, None].float(), normalize=True, nrow=len(
@@ -133,16 +143,12 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         raw, embedding, target, gt = batch
         y = self.forward(embedding)
-
-        loss = self.loss(y, target)
-
         y_amax = y.argmax(1)[0]
         inner = (y_amax == 1).detach().cpu().numpy()
         background = (y_amax == 2).detach().cpu().numpy()
         y_seg = compute_3class_segmentation(inner, background)
 
-        return {'test/loss': loss.detach().cpu().numpy(),
-                "gt": gt[0].detach().cpu().numpy(),
+        return {"gt": gt[0].detach().cpu().numpy(),
                 "yseg": y_seg}
 
 
@@ -170,12 +176,16 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         ax2.legend();
         fig.savefig(f"iou{self.global_step:012}.png")
         plt.close('all')
-        vislist = [torch.cat([torch.from_numpy(label2color(a['yseg'])),
-                              torch.from_numpy(label2color(a['gt']))], dim=-2)[:3] for a in outs
-                              if a['yseg'].shape[-2:] == (256, 256)]
 
-        grid = make_grid(vislist).permute(1, 2, 0).numpy()
-        imsave(f'val_seg_{self.global_step:012}.png', grid)
+        try:
+            vislist = [torch.cat([torch.from_numpy(label2color(a['yseg'])),
+                                torch.from_numpy(label2color(a['gt']))], dim=-2)[:3] for a in outs]
+                                # if a['yseg'].shape[-2:] == (690, 628)]
+
+            grid = make_grid(vislist).permute(1, 2, 0).numpy()
+            imsave(f'val_seg_{self.global_step:012}.png', grid)
+        except:
+            pass
 
         for t, ms in zip(taus, stats):
             msdict = ms._asdict()

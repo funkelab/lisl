@@ -3,7 +3,8 @@ import configargparse
 import numpy as np
 import math
 
-def run(data_module,
+def run(options,
+        data_module,
         dspath,
         lr,
         patchsize,
@@ -92,10 +93,11 @@ if __name__ == '__main__':
     check_val_every_n_epoch = 10
     max_epochs = 120
     dsmodule = "LargeDataModule"
-    dspath = "/nrs/funke/wolfs2/lisl/datasets/collection"
-    
-    for resnet_size in [101]:
-        run(data_module=dsmodule,
+    resnet_size = 101
+
+    for dspath in ["/nrs/funke/wolfs2/lisl/datasets/collection", "/nrs/funke/wolfs2/lisl/datasets/sim"]:
+        run(options=options,
+            data_module=dsmodule,
             dspath=dspath,
             lr=base_lr,
             patchsize=base_patchsize,

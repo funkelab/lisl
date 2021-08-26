@@ -455,6 +455,10 @@ class LargeDataset(Dataset):
                 return im
             except:
                 return None
+    def check(self, img):
+        if img is None:
+            return False
+        return img.dtype != bool
 
     def sample_image(self):
         for trial in range(self.max_trials):
@@ -500,7 +504,9 @@ class LargeDataset(Dataset):
         return 10000
 
     def __getitem__(self, _):
-        img = self.sample_image()
+        img = None
+        while(not self.check(img)):
+            img = self.sample_image()
         img = self.slice_to_2d(img)
         # return dummy label image
         return img[None], 0*img
@@ -602,7 +608,6 @@ class DSBTrainAugmentations(Dataset):
 
       x, y = self.root_dataset[index]
       y = y.astype(np.double)
-
       x, y = self.train_transforms(x, y)
       return x, y
 
@@ -832,11 +837,12 @@ class ZarrEmbeddingDataset(Dataset):
                  emb_keys,
                 #  target_transform="threeclass",
                  crop_to=(256, 256),
+                 limit_label_index=None,
                  min_spatial_div=None,
-                 cache=True):
+                 cache=False):
+
         super().__init__()
         self.ds_file = ds_file
-        print(ds_file)
         self.ds_data = zarr.open(ds_file, "r")
         self.emb_keys = emb_keys
 
@@ -848,8 +854,12 @@ class ZarrEmbeddingDataset(Dataset):
         #     raise NotImplementedError("can not find target tf for ", target_transform)
         
         self.min_spatial_div = min_spatial_div
+        
+        self.limit_label_index = (int(_) for _ in limit_label_index) if limit_label_index is not None else None
+
         self.rcrop = RandomCrop(crop_to) if crop_to is not None else None
         self.image_list = list(self.ds_data.keys())
+        self.ignore_index = -100
 
         self.cache = cache
         self.data_cache = {}
@@ -891,11 +901,16 @@ class ZarrEmbeddingDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        raw, embedding, gt = self.get_data(idx)
-        tc = self.target_tf(gt)
+        while f"{self.image_list[idx]}/{self.emb_keys[0]}" not in self.ds_data:
+            print(
+                f"Can not find {self.emb_keys[0]}[{self.image_list[idx]}] in {self.ds_file}")
+            idx = (idx + 1) % self._length
+
+        raw, embedding, gt_segmentation = self.get_data(idx)
+        tc = self.target_tf(gt_segmentation)
         
         if self.rcrop is not None:
-            raw, embedding, tc, gt = self.rcrop(raw, embedding, tc, gt)
+            raw, embedding, tc, gt_segmentation = self.rcrop(raw, embedding, tc, gt_segmentation)
         elif self.min_spatial_div is not None:
             # ensure that the image dimensions are divisible by min_spatial_div
             # if not, pad all arrays accordingly
@@ -903,11 +918,11 @@ class ZarrEmbeddingDataset(Dataset):
             ydiv = (raw.shape[-2] % self.min_spatial_div)
             if xdiv != 0 or ydiv != 0:
                 raw = np.pad(raw, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
-                gt = np.pad(gt, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
+                gt_segmentation = np.pad(gt_segmentation, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
                 embedding = np.pad(embedding, ((0, 0), (0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant')
-                tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant', constant_values=-100)
+                tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)), mode='constant', constant_values=self.ignore_index)
 
-        return raw, embedding, tc, gt
+        return raw, embedding, tc, gt_segmentation
 
 class AugmentedZarrEmbeddingDataset(Dataset):
     def __init__(self,
@@ -925,16 +940,17 @@ class AugmentedZarrEmbeddingDataset(Dataset):
 
         # filter non existent datasets
         dsf_files = [f for f in dsf_files if os.path.exists(f)]
-
         ds_list = [ZarrEmbeddingDataset(dsf,
                                         emb_keys=emb_keys,
                                         crop_to=crop_to,
                                         # target_transform=target_transform,
+                                        limit_label_index=limit,
                                         min_spatial_div=min_spatial_div) for dsf in dsf_files]
 
         if limit is not None:
-            indices = tuple(range(int(limit[0]), int(limit[1])))
-            ds_list = [Subset(ds, indices) for ds in ds_list] 
+            def get_index_for(ds, lim):
+                return (tuple(range(int(lim[0]), int(lim[1]))) * (2 * len(ds) // (int(lim[1]) - lim[0])))[:len(ds)]
+            ds_list = [Subset(ds, get_index_for(ds, limit)) for ds in ds_list]
 
         self._dataset = ConcatDataset(ds_list)
 
@@ -957,7 +973,6 @@ if __name__ == '__main__':
     for idx in tqdm(range(0, 1000)):
         batch = ds[idx]
         raw, embedding, tc, target = batch
-        print(idx, np.unique(target))
         tc_vis = np.stack([tc==0, tc==1, tc==2], axis=-1).astype(np.float32)
         imsave(f"/nrs/funke/wolfs2/lisl/experiments/dev00/{idx:06}_tc_vis.png", tc_vis)
         imsave(f"/nrs/funke/wolfs2/lisl/experiments/dev00/{idx:06}_raw.png", raw[0])
