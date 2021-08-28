@@ -70,6 +70,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  segmentation_type,
                  architecture="unet",
                  model_checkpoint=None,
+                 fix_backbone=False,
                  lr_milestones=(100)):
 
         super().__init__()
@@ -78,6 +79,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.initial_lr = initial_lr
         self.architecture = architecture
         self.model_checkpoint = model_checkpoint
+        self.fix_backbone = fix_backbone
         self.lr_milestones = list(int(_) for _ in lr_milestones)
         self.alpha = 0.01
         self.save_hyperparameters()
@@ -93,6 +95,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--segmentation_type', default="threeclass")
         parser.add_argument('--architecture', default="unet")
         parser.add_argument('--model_checkpoint', default=None)
+        parser.add_argument('--fix_backbone', action='store_true')
         parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
         parser.add_argument('--lr_milestones', nargs='*', default=[20, 30])
 
@@ -108,6 +111,10 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         elif self.architecture == "fcn":
             self.model = FNC(self.in_channels, self.out_channels,
                              checkpoint=self.model_checkpoint)
+
+            if self.fix_backbone:
+                for param in self.model.model.backbone.parameters():
+                    param.requires_grad = False
 
     def build_loss(self):
         if self.segmentation_type == "threeclass":
@@ -128,14 +135,18 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         if self.global_step % 1000 == 0 or (self.global_step < 1000 and self.global_step % 100 == 0):
             os.makedirs("img", exist_ok=True)
-            pred_grid = make_grid(y.detach().cpu()[:, :3].softmax(1), nrow=len(y)).permute(1, 2, 0).numpy()
+            if self.segmentation_type == "threeclass":
+                pred_grid = make_grid(y.detach().cpu()[:, :3].softmax(1), nrow=len(y)).permute(1, 2, 0).numpy()
+            elif self.segmentation_type == "stardist":
+                pred_grid = make_grid(y.detach().cpu()[:, [0, 8, -1]], nrow=len(y), normalize=True).permute(1, 2, 0).numpy()
+            
             raw_grid = make_grid(raw.detach().cpu(), normalize=True, nrow=len(
                 y), scale_each=True).permute(1, 2, 0).numpy()
             if self.segmentation_type == "threeclass":
                 target_grid = make_grid(target.detach().cpu()[:, None].float(), normalize=True, nrow=len(
                     y), scale_each=True).permute(1, 2, 0).numpy()
             elif self.segmentation_type == "stardist":
-                target_grid = make_grid(target.detach().cpu()[:, :3].float(), normalize=True, nrow=len(
+                target_grid = make_grid(target.detach().cpu()[:, [0, 8, -1]].float(), normalize=True, nrow=len(
                     y), scale_each=True).permute(1, 2, 0).numpy()
             gt_stack = torch.stack([torch.from_numpy(label2color(gt.detach().cpu().numpy()[i])) for i in range(len(gt))])
             gt_grid = make_grid(gt_stack, nrow=len(y))[
@@ -149,6 +160,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         raw, embedding, target, gt = batch
         y = self.forward(embedding)
+        os.makedirs("test", exist_ok=True)
+
         if self.segmentation_type == "threeclass":
             y_amax = y.argmax(1)[0]
             inner = (y_amax == 1).detach().cpu().numpy()
@@ -161,7 +174,6 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             width, height = y.shape[-2:]
             dist = y[0, :-1].detach().cpu().permute(1,2,0).numpy()
             prob = y[0, -1].detach().cpu().numpy()
-            print("HHHHHH", dist.shape, prob.shape)
             points, probi, disti = non_maximum_suppression(dist, prob)
             y_seg = polygons_to_label(disti, points, prob=probi, shape=(width, height))
         else:

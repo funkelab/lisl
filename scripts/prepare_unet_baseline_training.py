@@ -49,17 +49,30 @@ if __name__ == '__main__':
 
     options = p.parse_args()
     experiment_number = 0
-    offset_dict = {1:[1 * i for i in range(10)],
-                   2:[2 * i for i in range(8)],
-                   4:[4 * i for i in range(8)],
-                   9:[9 * i for i in range(5)],
-                   18:[18 * i for i in range(3)],
-                   34:[34 * i for i in range(3)],
-                   65:[65 * i for i in range(3)],
-                   124:[0, 124, 124*2],
-                   237:[0, 100, 200],
-                   326:[0, 445-326],
-                   None:[0]}
+    # offset_dict = {1:[1 * i for i in range(10)],
+    #                2:[2 * i for i in range(8)],
+    #                4:[4 * i for i in range(8)],
+    #                9:[9 * i for i in range(5)],
+    #                18:[18 * i for i in range(3)],
+    #                34:[34 * i for i in range(3)],
+    #                65:[65 * i for i in range(3)],
+    #                124:[0, 124, 124*2],
+    #                237:[0, 100, 200],
+    #                326:[0, 445-326],
+    #                None:[0]}
+    max_image_number = 445
+    limlist = list(np.unique(np.logspace(0, np.log10(max_image_number), num=8, base=10).astype(int)))
+    perm =  np.random.RandomState(seed=42).permutation(max_image_number)
+    offset_dict = {None: [0]}
+    for l in limlist:
+        if 3 * l < max_image_number:
+            offset_dict[l] = [l * i for i in range(3)]
+        elif 2 * l < max_image_number:
+            offset_dict[l] = [l * i for i in range(2)]
+        elif l < max_image_number:
+            offset_dict[l] = [0, max_image_number-l]
+        else:
+            offset_dict[l] = [0]
 
     keys_and_channels = {"raw": 1,
                       "raw train/prediction cooc_up1.25 cooc_up1.5 cooc_up1.75 cooc_up2.0 cooc_up3.0 cooc_up4.0": 15,
@@ -67,7 +80,7 @@ if __name__ == '__main__':
                       "raw train/prediction cooc_up1.25 cooc_up1.5 cooc_up1.75 cooc_up2.0 cooc_up3.0 cooc_up4.0 simclr": 1+14+32}
 
     for emb_keys, inchannels in keys_and_channels.items():
-        for limit in [1, 2, 4, 9, 18, 34, 65, 124, 237, 326, None]:
+        for limit in limlist + [None]:
             for offset in offset_dict[limit]:
                 run(options, offset, limit, emb_keys, inchannels)
                 experiment_number += 1
