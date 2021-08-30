@@ -27,6 +27,7 @@ from random import choice
 import zipfile
 from io import BytesIO
 from os.path import isfile, join
+import skimage
 
 from inferno.io.transform import Compose, Transform
 from inferno.io.transform.image import (RandomRotate, ElasticTransform,
@@ -813,7 +814,7 @@ class Threeclass(Transform):
 class StardistTf(Transform):
     """Convert segmentation to stardist"""
 
-    def __init__(self, n_rays=32):
+    def __init__(self, n_rays=16):
         super().__init__()
         self.n_rays = n_rays
 
@@ -840,12 +841,14 @@ class ZarrEmbeddingDataset(Dataset):
                  crop_to=(256, 256),
                  limit_label_index=None,
                  min_spatial_div=None,
-                 cache=False):
+                 cache=False,
+                 p_dropout=0.2):
 
         super().__init__()
         self.ds_file = ds_file
         self.ds_data = zarr.open(ds_file, "r")
         self.emb_keys = emb_keys
+        self.p_dropout = p_dropout
 
         self.target_transform = target_transform
         if target_transform == 'threeclass':
@@ -900,6 +903,17 @@ class ZarrEmbeddingDataset(Dataset):
             embedding = emb_in[:].astype(np.float32)
         return embedding
 
+    @staticmethod
+    def augment_raw(raw, mode='gaussian', seed=None, clip=False, min_scale=0.5, max_scale=1.5, shift=0.2):
+        raw = skimage.util.random_noise(
+                  raw,
+                  mode=mode,
+                  seed=seed,
+                  clip=clip)
+        scale = min_scale + ((max_scale - min_scale) * random.random())
+        shift = (2*shift*random.random()) - shift
+        return raw*scale + shift
+
     def __getitem__(self, idx):
 
         while f"{self.image_list[idx]}/{self.emb_keys[0]}" not in self.ds_data:
@@ -908,10 +922,20 @@ class ZarrEmbeddingDataset(Dataset):
             idx = (idx + 1) % self._length
 
         raw, embedding, gt_segmentation = self.get_data(idx)
+        raw = self.augment_raw(raw)
         tc = self.target_tf(gt_segmentation)
         
         if self.rcrop is not None:
             raw, embedding, tc, gt_segmentation = self.rcrop(raw, embedding, tc, gt_segmentation)
+
+        if self.p_dropout > 0 and embedding.shape[1] > 1:
+            rs = np.random.rand(1, embedding.shape[1], 1, 1)
+            # make sure that at least one channel is not masked
+            rs[rs.argmax()] = 1.
+
+            mask = (rs > self.p_dropout).astype(embedding.dtype)
+            embedding = embedding * mask
+
         elif self.min_spatial_div is not None:
             # ensure that the image dimensions are divisible by min_spatial_div
             # if not, pad all arrays accordingly
@@ -926,7 +950,7 @@ class ZarrEmbeddingDataset(Dataset):
                                 mode='constant', constant_values=0)
                 else:
                     tc = np.pad(tc, ((0, self.min_spatial_div - ydiv), (0, self.min_spatial_div - xdiv)),
-                                mode='constant', constant_values=self.ignore_index)
+                                mode='constant', constant_values=self.ignore_index) 
 
         return raw, embedding, tc, gt_segmentation
 

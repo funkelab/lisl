@@ -12,11 +12,11 @@ sns.set_theme(style="darkgrid")
 
 num_setups = 308
 
-exp_name = "resnet_init_2"
+exp_name = "unet_combinations_9_stardist_v1"
 experiment_folders = [#"/nrs/funke/wolfs2/lisl/experiments/unet_combinations_3/",
                       #"/nrs/funke/wolfs2/lisl/experiments/unet_combinations_5/"]
                     #   "/nrs/funke/wolfs2/lisl/experiments/unet_combinations_8/",
-                      "/nrs/funke/wolfs2/lisl/experiments/resnet_init_2"]
+                      "/nrs/funke/wolfs2/lisl/experiments/unet_combinations_9_stardist/"]
 
     # read ds limit from train script
 def read_training_args(train_script):
@@ -30,7 +30,7 @@ def read_training_args(train_script):
 all_stats = []
 
 for experiment_folder in experiment_folders:
-    for setup_folder in glob(experiment_folder + f"02_train*/setup_t*"):
+    for setup_folder in glob(experiment_folder + f"01_train/setup_t*"):
 
         train_script = setup_folder + "/train.sh"
         if not os.path.isfile(train_script):

@@ -50,7 +50,6 @@ from lisl.pl.utils import (adapted_rand, vis,
 from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
 from lisl.pl.evaluation import compute_3class_segmentation
-from lisl.pl.loss import AnchorLoss
 from lisl.pl.loss import AnchorLoss, SineAnchorLoss
 from lisl.pl.loss_supervised import SupervisedInstanceEmbeddingLoss
 
@@ -70,7 +69,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  segmentation_type,
                  architecture="unet",
                  model_checkpoint=None,
-                 fix_backbone=False,
+                 fix_backbone_until=0,
                  lr_milestones=(100)):
 
         super().__init__()
@@ -79,7 +78,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.initial_lr = initial_lr
         self.architecture = architecture
         self.model_checkpoint = model_checkpoint
-        self.fix_backbone = fix_backbone
+        self.fix_backbone_until = fix_backbone_until
         self.lr_milestones = list(int(_) for _ in lr_milestones)
         self.alpha = 0.01
         self.save_hyperparameters()
@@ -95,7 +94,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--segmentation_type', default="threeclass")
         parser.add_argument('--architecture', default="unet")
         parser.add_argument('--model_checkpoint', default=None)
-        parser.add_argument('--fix_backbone', action='store_true')
+        parser.add_argument('--fix_backbone_until', default=0, type=int)
         parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
         parser.add_argument('--lr_milestones', nargs='*', default=[20, 30])
 
@@ -112,7 +111,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             self.model = FNC(self.in_channels, self.out_channels,
                              checkpoint=self.model_checkpoint)
 
-            if self.fix_backbone:
+            if self.fix_backbone_until >0:
                 for param in self.model.model.backbone.parameters():
                     param.requires_grad = False
 
@@ -154,6 +153,12 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             grid = np.concatenate((pred_grid, raw_grid, target_grid, gt_grid), axis=0)
             imsave(f'img/{self.global_step:08}.png', grid)
 
+        if self.fix_backbone_until > 0 and \
+                self.fix_backbone_until == self.global_step:
+                    print(f"unfreezing backbone in iteration {self.global_step}")
+                    for param in self.model.model.backbone.parameters():
+                        param.requires_grad = True
+
         return {'loss': loss}
 
     def test_step(self, batch, batch_nb):
@@ -178,6 +183,12 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             y_seg = polygons_to_label(disti, points, prob=probi, shape=(width, height))
         else:
             return NotImplementedError()
+
+        color_gt = torch.from_numpy(label2color(gt[0].cpu().numpy())[:3])
+        color_seg = torch.from_numpy(label2color(y_seg)[:3])
+        vislist = [color_gt, color_seg] + [_.cpu()[None].expand(3, y.shape[-2], y.shape[-1]) for _ in y[0]]
+        grid = make_grid(vislist, normalize=True, scale_each=True).permute(1, 2, 0).numpy()
+        imsave(f'test/pred_{batch_nb:06}.png', grid)
 
         return {"gt": gt[0].detach().cpu().numpy(),
                 "yseg": y_seg}
@@ -223,6 +234,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                 self.log(f'val/{k}_0p5', float(msdict[k]), prog_bar=((t in [0.5]) and (k in ['f1'])), logger=True)
 
         stats_dict = dict((t, ms._asdict()) for t, ms in zip(taus, stats))
+        stats_dict["SEG score"] = np.mean([seg_metric(a['yseg'], a['gt']) for a in outs])
+
         with open(f"val_stats_{self.global_step:012}.json", "w") as stats_out:
             json.dump(stats_dict, stats_out)
 

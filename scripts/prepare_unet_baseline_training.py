@@ -65,14 +65,14 @@ if __name__ == '__main__':
     perm =  np.random.RandomState(seed=42).permutation(max_image_number)
     offset_dict = {None: [0]}
     for l in limlist:
-        if 3 * l < max_image_number:
-            offset_dict[l] = [l * i for i in range(3)]
-        elif 2 * l < max_image_number:
-            offset_dict[l] = [l * i for i in range(2)]
+        if 2 * l < max_image_number:
+            offset_dict[l] = np.linspace(0, max_image_number - l - 1, num = 3, dtype=int)
         elif l < max_image_number:
             offset_dict[l] = [0, max_image_number-l]
         else:
             offset_dict[l] = [0]
+
+    print("offset_dict", offset_dict)
 
     keys_and_channels = {"raw": 1,
                       "raw train/prediction cooc_up1.25 cooc_up1.5 cooc_up1.75 cooc_up2.0 cooc_up3.0 cooc_up4.0": 15,
