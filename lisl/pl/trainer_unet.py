@@ -11,6 +11,7 @@ from torchvision.utils import make_grid
 from torch import optim
 from torch.utils.data import DataLoader, random_split
 from torch.utils.data.distributed import DistributedSampler
+from ignite.handlers.param_scheduler import PiecewiseLinear
 import random
 import operator
 
@@ -73,7 +74,9 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  fix_backbone_until=0,
                  lr_milestones=(100),
                  finetuning=False,
-                 finetuning_unfreezing_interval=100):
+                 finetuning_unfreezing_interval=100,
+                 finetuning_n_warmup=100,
+                 finetuning_niterations=1000):
 
         super().__init__()
         self.in_channels = in_channels
@@ -85,6 +88,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.lr_milestones = list(int(_) for _ in lr_milestones)
         self.finetuning = finetuning
         self.finetuning_unfreezing_interval = finetuning_unfreezing_interval
+        self.finetuning_n_warmup = finetuning_n_warmup
+        self.finetuning_niterations = finetuning_niterations
         self.alpha = 0.01
         self.save_hyperparameters()
         self.build_models()
@@ -100,6 +105,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--architecture', default="unet")
         parser.add_argument('--finetuning', action='store_true', help="uses Freez + STLR + disc (see https://arxiv.org/abs/1801.06146)")
         parser.add_argument('--finetuning_unfreezing_interval', type=int)
+        parser.add_argument('--finetuning_n_warmup', type=int)
+        parser.add_argument('--finetuning_niterations', type=int)
         parser.add_argument('--model_checkpoint', default=None)
         parser.add_argument('--fix_backbone_until', default=0, type=int)
         parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
@@ -173,9 +180,18 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             unfreezing_index = (self.global_step // self.finetuning_unfreezing_interval) - 1
             # unpack all names that need to be unfrozen
             unfreezing_layers = [_ for sublist in self.layer_parameters[unfreezing_index:] for _ in sublist]
-            self.optimizers()
+
+            # Freeze: unfreeze layers sequentially
             for name, param in self.model.model.named_parameters():
                 param.require_grad = name in unfreezing_layers
+
+            # STLR: adjust learning rate of all layers (slanted triangular learning rate)
+            self.lr_schedulers().step()
+
+            # disc: set unique learning rate for every layer
+            for param_group in self.optimizers().param_groups:
+                layer_index = int(param_group["name"])
+                param_group["lr"] = param_group["lr"] / (1.2 ** layer_index)
 
         return {'loss': loss}
 
@@ -258,7 +274,29 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             json.dump(stats_dict, stats_out)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.initial_lr, weight_decay=0.0)
-        scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.2)
+        if self.finetuning:
+            parameter_groups = []
+            for i, layer_p_names in reversed(list(enumerate(self.layer_parameters))):
+                print("cfg opt", i, layer_p_names)
+                group = {'name': str(i),
+                         'params': [p for n, p in self.model.model.named_parameters() if n in layer_p_names]}
+                parameter_groups.append(group)
+
+            # Sanity check that we still have the same number of parameters
+            assert sum(p.numel() for g in parameter_groups for p in g['params'])\
+                == sum(p.numel() for p in self.model.parameters())
+
+            optimizer = torch.optim.Adam(parameter_groups, lr=self.initial_lr)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer,
+                                                            max_lr=self.initial_lr,
+                                                            steps_per_epoch=1,
+                                                            pct_start=0.1,
+                                                            epochs=self.finetuning_niterations,
+                                                            anneal_strategy='linear',
+                                                            verbose=True)
+
+        else:
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=self.initial_lr, weight_decay=0.0)
+            scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.2)
         return [optimizer], [scheduler]
 
