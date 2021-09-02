@@ -12,6 +12,7 @@ from torch import optim
 from torch.utils.data import DataLoader, random_split
 from torch.utils.data.distributed import DistributedSampler
 import random
+import operator
 
 import pytorch_lightning as pl
 from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet, FNC
@@ -70,7 +71,9 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  architecture="unet",
                  model_checkpoint=None,
                  fix_backbone_until=0,
-                 lr_milestones=(100)):
+                 lr_milestones=(100),
+                 finetuning=False,
+                 finetuning_unfreezing_interval=100):
 
         super().__init__()
         self.in_channels = in_channels
@@ -80,6 +83,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.model_checkpoint = model_checkpoint
         self.fix_backbone_until = fix_backbone_until
         self.lr_milestones = list(int(_) for _ in lr_milestones)
+        self.finetuning = finetuning
+        self.finetuning_unfreezing_interval = finetuning_unfreezing_interval
         self.alpha = 0.01
         self.save_hyperparameters()
         self.build_models()
@@ -93,10 +98,12 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--initial_lr', default=0.0001, type=float)
         parser.add_argument('--segmentation_type', default="threeclass")
         parser.add_argument('--architecture', default="unet")
+        parser.add_argument('--finetuning', action='store_true', help="uses Freez + STLR + disc (see https://arxiv.org/abs/1801.06146)")
+        parser.add_argument('--finetuning_unfreezing_interval', type=int)
         parser.add_argument('--model_checkpoint', default=None)
         parser.add_argument('--fix_backbone_until', default=0, type=int)
         parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
-        parser.add_argument('--lr_milestones', nargs='*', default=[20, 30])
+        parser.add_argument('--lr_milestones', nargs='*', default=[10, 15])
 
         return parser
 
@@ -110,6 +117,9 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         elif self.architecture == "fcn":
             self.model = FNC(self.in_channels, self.out_channels,
                              checkpoint=self.model_checkpoint)
+
+            if self.finetuning:
+                self.layer_parameters = self.model.get_parameters_per_layer()
 
             if self.fix_backbone_until >0:
                 for param in self.model.model.backbone.parameters():
@@ -158,6 +168,14 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                     print(f"unfreezing backbone in iteration {self.global_step}")
                     for param in self.model.model.backbone.parameters():
                         param.requires_grad = True
+
+        if self.finetuning:
+            unfreezing_index = (self.global_step // self.finetuning_unfreezing_interval) - 1
+            # unpack all names that need to be unfrozen
+            unfreezing_layers = [_ for sublist in self.layer_parameters[unfreezing_index:] for _ in sublist]
+            self.optimizers()
+            for name, param in self.model.model.named_parameters():
+                param.require_grad = name in unfreezing_layers
 
         return {'loss': loss}
 

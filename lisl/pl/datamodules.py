@@ -394,7 +394,8 @@ class ThreeClassDataModule(pl.LightningDataModule):
                                         self.emb_keys,
                                         target_transform=self.target_transform,
                                         crop_to=None,
-                                        min_spatial_div=self.min_spatial_div)
+                                        min_spatial_div=self.min_spatial_div,
+                                        p_dropout=0)
 
     def train_dataloader(self):
         return DataLoader(self.train,
@@ -426,7 +427,7 @@ class ThreeClassDataModule(pl.LightningDataModule):
         parser.add_argument('--ds_file_postfix', type=str, required=True)
         parser.add_argument('--augmentations', type=int, required=True)
         parser.add_argument('--emb_keys', type=str, required=True, nargs='+')
-        parser.add_argument('--target_transform', type=str)
+        parser.add_argument('--target_transform', type=str, default="threeclass")
         parser.add_argument('--crop_to', default=(256, 256))
         parser.add_argument('--min_spatial_div', default=16)
         parser.add_argument('--ds_limit', default=None, type=int, nargs='+')

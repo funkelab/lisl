@@ -53,12 +53,12 @@ if __name__ == '__main__':
     cwd = os.getcwd().split("/")
     exp_name = cwd[-3]
     setup = cwd[-1]
-    logger = WandbLogger(name=f"{exp_name}_{setup}", 
-                         project='ThreeClassTraining',
-                         entity='swolf',
-                         log_model=False)
+    # logger = WandbLogger(name=f"{exp_name}_{setup}", 
+    #                      project='ThreeClassTraining',
+    #                      entity='swolf',
+    #                      log_model=False)
 
-    trainer = pl.Trainer.from_argparse_args(args, logger=logger)
+    trainer = pl.Trainer.from_argparse_args(args)#, logger=logger)
     trainer.callbacks.append(checkpoint_callback)
     trainer.callbacks.append(lr_logger)
     trainer.fit(model, datamodule)

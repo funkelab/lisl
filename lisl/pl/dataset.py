@@ -928,8 +928,8 @@ class ZarrEmbeddingDataset(Dataset):
         if self.rcrop is not None:
             raw, embedding, tc, gt_segmentation = self.rcrop(raw, embedding, tc, gt_segmentation)
 
-        if self.p_dropout > 0 and embedding.shape[1] > 1:
-            rs = np.random.rand(1, embedding.shape[1], 1, 1)
+        if self.p_dropout > 0 and embedding.shape[0] > 1:
+            rs = np.random.rand(embedding.shape[0], 1, 1)
             # make sure that at least one channel is not masked
             rs[rs.argmax()] = 1.
 

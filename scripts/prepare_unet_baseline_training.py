@@ -15,7 +15,7 @@ def run(options, offset, limit, emb_keys, inchannels, ngpu=1):
     args += f" --max_epochs 100 "
     args += f" --check_val_every_n_epoch 1 "
 
-    args += f" --max_steps 40000 "
+    args += f" --max_steps 20000 "
     args += f" --emb_keys {emb_keys} "
     args += f" --in_channels {inchannels} "
   

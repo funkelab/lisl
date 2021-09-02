@@ -12,11 +12,12 @@ sns.set_theme(style="darkgrid")
 
 num_setups = 308
 
-exp_name = "unet_combinations_9_stardist_v1"
+folder_name = "unet_combinations_11_dropout"
+exp_name = f"{folder_name}_v1"
 experiment_folders = [#"/nrs/funke/wolfs2/lisl/experiments/unet_combinations_3/",
                       #"/nrs/funke/wolfs2/lisl/experiments/unet_combinations_5/"]
                     #   "/nrs/funke/wolfs2/lisl/experiments/unet_combinations_8/",
-                      "/nrs/funke/wolfs2/lisl/experiments/unet_combinations_9_stardist/"]
+                      f"/nrs/funke/wolfs2/lisl/experiments/{folder_name}/"]
 
     # read ds limit from train script
 def read_training_args(train_script):
@@ -55,23 +56,38 @@ for experiment_folder in experiment_folders:
         for stats_file in glob(setup_folder+"/val_stats_*.json"):
             iteration = int(stats_file.split("_")[-1][:-5])
             setup = stats_file.split("/")[-2]
+            initialization = stats_file.split("/")[-3].split("_")[-1]
             with open(stats_file) as f:
                 stats = json.load(f)
                 for threshold in stats:
-                    for stat_key in stats[threshold]:
+                    if isinstance(stats[threshold], dict):
+                        for stat_key in stats[threshold]:
+                            data_dict = {}
+                            data_dict["iteration"] = iteration
+                            data_dict["ds_limit"] = ds_limit
+                            data_dict["ds_tmp"] = ds_start + (1e8 * ds_limit)
+                            data_dict["emb_keys"] = emb_keys
+                            data_dict["threshold"] = threshold
+                            data_dict["stat_key"] = stat_key
+                            data_dict["setup"] = setup
+                            data_dict["score"] = stats[threshold][stat_key]
+                            all_stats.append(data_dict)
+                    else:
                         data_dict = {}
                         data_dict["iteration"] = iteration
                         data_dict["ds_limit"] = ds_limit
                         data_dict["ds_tmp"] = ds_start + (1e8 * ds_limit)
                         data_dict["emb_keys"] = emb_keys
-                        data_dict["threshold"] = threshold
-                        data_dict["stat_key"] = stat_key
+                        data_dict["threshold"] = "seg"
+                        data_dict["stat_key"] = threshold
                         data_dict["setup"] = setup
-                        data_dict["score"] = stats[threshold][stat_key]
+                        data_dict["initialization"] = initialization
+                        data_dict["score"] = stats[threshold]
                         all_stats.append(data_dict)
 
 
 df = pd.DataFrame.from_dict(all_stats)
+print(df)
 
 emb_keys_dict = {
         'raw_': 'raw',
@@ -89,15 +105,16 @@ for th in ["0.5", "0.6", "0.8", "0.9"]:
         ax = None
         legend = []
         
-        refkey = "raw_train/prediction_cooc_up1.25_cooc_up1.5_cooc_up1.75_cooc_up2.0_cooc_up3.0_cooc_up4.0_"
-        valid_refs = np.unique(df[df["emb_keys"]==refkey]["ds_tmp"])
+        # refkey = "raw_train/prediction_cooc_up1.25_cooc_up1.5_cooc_up1.75_cooc_up2.0_cooc_up3.0_cooc_up4.0_"
+        # valid_refs = np.unique(df[df["emb_keys"]==refkey]["ds_tmp"])
+        # print(valid_refs)
         
         for emb_keys in emb_keys_dict:
 
             sel_embedkey = df[df["emb_keys"]==emb_keys]
             sel_key_score = sel_embedkey[sel_embedkey["stat_key"]==score_name]
 
-            sel_key_score = sel_key_score[sel_embedkey["ds_tmp"].isin(valid_refs)]
+            # sel_key_score = sel_key_score[sel_embedkey["ds_tmp"].isin(valid_refs)]
 
             sel_key_score_th = sel_key_score[sel_key_score["threshold"]==th]
             subs = sel_key_score_th[["ds_limit", "setup", "score"]]

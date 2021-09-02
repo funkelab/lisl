@@ -41,7 +41,6 @@ class UnPatchify(object):
         x = x.view(-1, c, self.patch_size, self.patch_size)
         x = x.squeeze(0)
         x = x.unsqueeze(0)
-        print(x.size())
         b, c, h, w = x.size()
         x = x.squeeze(0)
         return x
@@ -183,7 +182,6 @@ class MLP(nn.Module):
         if isinstance(n_hidden_layers, dict):
             n_hidden_layers = 4
             n_classes = 1
-        print(n_hidden_layers)
 
         self.block_forward = nn.Sequential()
         for i in range(n_hidden_layers):
@@ -497,6 +495,34 @@ class FNC(nn.Module):
             del tmodel[dk]
 
         self.model.load_state_dict(tmodel, strict=False)
+
+    def get_parameters_per_layer(self):
+
+        # returns a list of all parameters grouped by layers 
+
+        parameters_per_layer = []
+        
+        current_depth = None
+        current_paramets = []
+        for name, param in self.model.named_parameters():
+            
+            name_split = name.split('.')
+            if name_split[0] == 'backbone':
+                if name_split[1].startswith("layer"):
+                    depth_from_name = (int(name_split[1][5:]),int(name_split[2]))
+                else:
+                    depth_from_name = (0, 0)
+            else:
+                depth_from_name = name_split[0]
+
+            # new depth detected
+            if depth_from_name != current_depth:
+                parameters_per_layer.append([])
+                current_depth = depth_from_name
+
+            parameters_per_layer[-1].append(name)
+
+        return parameters_per_layer
 
     def forward(self, input):
         return self.model(input)['out']
