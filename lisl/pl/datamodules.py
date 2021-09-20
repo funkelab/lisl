@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from lisl.pl.dataset import (PatchedDataset, SparseChannelDataset, 
                              RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
                              DSBTrainAugmentations, DSBTestAugmentations,
-                             LargeDataset, AugmentedZarrEmbeddingDataset, ZarrEmbeddingDataset)
+                             LargeDataset, AugmentedZarrEmbeddingDataset, AugmentedZarrDataset, ZarrEmbeddingDataset)
 from torchvision import transforms, datasets
 from lisl.pl.utils import QuantileNormalizeTorchTransform
 
@@ -357,7 +357,7 @@ class CelebADataModule(AnchorDataModule):
       return dsb_train, dsb_val
 
 
-class ThreeClassDataModule(pl.LightningDataModule):
+class PrecomputedThreeClassDataModule(pl.LightningDataModule):
 
     def __init__(self, batch_size, ds_file_prefix,
                  ds_file_postfix, augmentations,
@@ -436,4 +436,69 @@ class ThreeClassDataModule(pl.LightningDataModule):
 
         return parser
 
+
+class ThreeClassDataModule(pl.LightningDataModule):
+
+    def __init__(self, batch_size, ds_file,
+                 loader_workers, val_ds_file,
+                 test_ds_file, target_transform="threeclass", 
+                 crop_to=(256, 256), ds_limit=None):
+
+        super().__init__()
+        self.batch_size = batch_size
+        self.ds_file = ds_file
+        self.target_transform = target_transform
+        self.crop_to = crop_to
+        self.loader_workers = loader_workers
+
+        self.val_ds_file = val_ds_file
+        self.test_ds_file = test_ds_file
+        self.limit = ds_limit
+
+    def setup(self, stage=None):
+        self.train = AugmentedZarrDataset(self.ds_file,
+                                          target_transform=self.target_transform,
+                                          crop_to=self.crop_to,
+                                          limit=self.limit)
+
+        self.test = AugmentedZarrDataset(self.test_ds_file,
+                                        target_transform=self.target_transform,
+                                        crop_to=None,
+                                        augment=False)
+
+    def train_dataloader(self):
+        return DataLoader(self.train,
+                          batch_size=self.batch_size,
+                          num_workers=self.loader_workers,
+                          shuffle=True)
+    
+    def val_dataloader(self):
+        return None 
+
+    def test_dataloader(self):
+        return DataLoader(self.test,
+                          batch_size=1,
+                          num_workers=1,
+                          shuffle=False)
+
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = argparse.ArgumentParser(
+            parents=[parent_parser], add_help=False)
+        try:
+            parser.add_argument('--batch_size', type=int, default=8)
+        except argparse.ArgumentError:
+            pass
+
+        parser.add_argument('--loader_workers', type=int, default=8)
+        parser.add_argument('--ds_file', type=str, required=True)
+        parser.add_argument('--target_transform', type=str, default="threeclass")
+        parser.add_argument('--crop_to', default=(256, 256))
+        parser.add_argument('--min_spatial_div', default=16)
+        parser.add_argument('--ds_limit', default=None, type=int, nargs='+')
+        parser.add_argument('--val_ds_file', type=str)
+        parser.add_argument('--test_ds_file', type=str, required=True)
+
+        return parser
 

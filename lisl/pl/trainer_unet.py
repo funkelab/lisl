@@ -75,7 +75,6 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                  lr_milestones=(100),
                  finetuning=False,
                  finetuning_unfreezing_interval=100,
-                 finetuning_n_warmup=100,
                  finetuning_niterations=1000):
 
         super().__init__()
@@ -88,7 +87,6 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         self.lr_milestones = list(int(_) for _ in lr_milestones)
         self.finetuning = finetuning
         self.finetuning_unfreezing_interval = finetuning_unfreezing_interval
-        self.finetuning_n_warmup = finetuning_n_warmup
         self.finetuning_niterations = finetuning_niterations
         self.alpha = 0.01
         self.save_hyperparameters()
@@ -105,7 +103,6 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--architecture', default="unet")
         parser.add_argument('--finetuning', action='store_true', help="uses Freez + STLR + disc (see https://arxiv.org/abs/1801.06146)")
         parser.add_argument('--finetuning_unfreezing_interval', type=int)
-        parser.add_argument('--finetuning_n_warmup', type=int)
         parser.add_argument('--finetuning_niterations', type=int)
         parser.add_argument('--model_checkpoint', default=None)
         parser.add_argument('--fix_backbone_until', default=0, type=int)
@@ -220,6 +217,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
         color_gt = torch.from_numpy(label2color(gt[0].cpu().numpy())[:3])
         color_seg = torch.from_numpy(label2color(y_seg)[:3])
+        
         vislist = [color_gt, color_seg] + [_.cpu()[None].expand(3, y.shape[-2], y.shape[-1]) for _ in y[0]]
         grid = make_grid(vislist, normalize=True, scale_each=True).permute(1, 2, 0).numpy()
         imsave(f'test/pred_{batch_nb:06}.png', grid)
@@ -293,7 +291,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
                                                             pct_start=0.1,
                                                             epochs=self.finetuning_niterations,
                                                             anneal_strategy='linear',
-                                                            verbose=True)
+                                                            verbose=False)
 
         else:
             optimizer = torch.optim.Adam(self.model.parameters(), lr=self.initial_lr, weight_decay=0.0)
