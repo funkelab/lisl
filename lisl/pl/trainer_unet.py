@@ -16,7 +16,7 @@ import random
 import operator
 
 import pytorch_lightning as pl
-from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet, FNC
+from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet, FNC, Deeplab
 from funlib.learn.torch.models import UNet
 from mipnet.models.unet import UNet2d
 from deeplabv3plus.network.modeling import deeplabv3plus_resnet101
@@ -121,6 +121,17 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         elif self.architecture == "fcn":
             self.model = FNC(self.in_channels, self.out_channels,
                              checkpoint=self.model_checkpoint)
+
+            if self.finetuning:
+                self.layer_parameters = self.model.get_parameters_per_layer()
+
+            if self.fix_backbone_until >0:
+                for param in self.model.model.backbone.parameters():
+                    param.requires_grad = False
+
+        elif self.architecture == "deeplab":
+            self.model = Deeplab(self.in_channels, self.out_channels,
+                                 checkpoint=self.model_checkpoint)
 
             if self.finetuning:
                 self.layer_parameters = self.model.get_parameters_per_layer()
@@ -259,11 +270,6 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             imsave(f'val_seg_{self.global_step:012}.png', grid)
         except:
             pass
-
-        for t, ms in zip(taus, stats):
-            msdict = ms._asdict()
-            for k in ('precision', 'recall', 'accuracy', 'f1', 'mean_true_score', 'mean_matched_score', 'panoptic_quality'):
-                self.log(f'val/{k}_0p5', float(msdict[k]), prog_bar=((t in [0.5]) and (k in ['f1'])), logger=True)
 
         stats_dict = dict((t, ms._asdict()) for t, ms in zip(taus, stats))
         stats_dict["SEG score"] = np.mean([seg_metric(a['yseg'], a['gt']) for a in outs])

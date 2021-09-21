@@ -62,4 +62,9 @@ if __name__ == '__main__':
     trainer.callbacks.append(checkpoint_callback)
     trainer.callbacks.append(lr_logger)
     trainer.fit(model, datamodule)
+
+    filename = os.path.join("models", 'last.pytorch')
+    print("saving", filename)
+    torch.save(model.model.state_dict(), filename)
+
     test_results = trainer.test(ckpt_path=None)

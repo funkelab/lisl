@@ -527,3 +527,77 @@ class FNC(nn.Module):
     def forward(self, input):
         return self.model(input)['out']
 
+class Deeplab(nn.Module):
+    
+    def __init__(self, inchannel, outchannel, checkpoint=None, pretrained=False):
+        super().__init__()
+        torch.hub._validate_not_a_forked_repo=lambda a,b,c: True
+        self.model = torch.hub.load('pytorch/vision:v0.10.0', 'deeplabv3_resnet101', pretrained=pretrained)
+        # adjust in channels in first convolution
+        ptweights = self.model.backbone.conv1.weight.mean(dim=1, keepdim=True).data
+        self.model.backbone.conv1 = nn.Conv2d(inchannel, 64, kernel_size=7, padding=3, bias=False)
+        
+        # adjust out channels in first convolution
+        self.model.classifier[4] = nn.Conv2d(256, outchannel, kernel_size=1, padding=0, bias=True)
+
+        if checkpoint is not None:
+            self.load_checkpoint(checkpoint)
+
+    def load_checkpoint(self, checkpoint):
+
+        def get_new_key(key):
+            key = key.replace("resnet.0", "backbone.conv1")
+            key = key.replace("resnet.1", "backbone.bn1")
+            if key.startswith("resnet."):
+                index = int(key[7:8]) - 3
+                key = f"{key[:7]}{index}{key[8:]}"
+                assert index >= 0
+                key = key.replace("resnet.", "backbone.layer")
+            
+            key = key.replace("head.0", "classifier.1")
+            key = key.replace("head.2", "classifier.4")
+
+            return key
+
+        tmodel = torch.load(checkpoint)["model_state_dict"]
+
+        for k in list(tmodel.keys()):
+            new_key = get_new_key(k)
+            tmodel[new_key] = tmodel.pop(k)
+
+        for dk in ['classifier.1.weight', 'classifier.1.bias', 'classifier.4.weight', 'classifier.4.bias']:
+            del tmodel[dk]
+
+        self.model.load_state_dict(tmodel, strict=False)
+
+    def get_parameters_per_layer(self):
+
+        # returns a list of all parameters grouped by layers 
+
+        parameters_per_layer = []
+        
+        current_depth = None
+        current_paramets = []
+        for name, param in self.model.named_parameters():
+            
+            name_split = name.split('.')
+            if name_split[0] == 'backbone':
+                if name_split[1].startswith("layer"):
+                    depth_from_name = (int(name_split[1][5:]),int(name_split[2]))
+                else:
+                    depth_from_name = (0, 0)
+            else:
+                depth_from_name = name_split[0]
+
+            # new depth detected
+            if depth_from_name != current_depth:
+                parameters_per_layer.append([])
+                current_depth = depth_from_name
+
+            parameters_per_layer[-1].append(name)
+
+        return parameters_per_layer
+
+    def forward(self, input):
+        return self.model(input)['out']
+
