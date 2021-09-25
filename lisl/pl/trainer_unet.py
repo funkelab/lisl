@@ -277,6 +277,12 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
         with open(f"val_stats_{self.global_step:012}.json", "w") as stats_out:
             json.dump(stats_dict, stats_out)
 
+    def validation_step(self, batch, batch_nb):
+        return self.test_step(batch, batch_nb)
+
+    def validation_epoch_end(self, outs):
+        return self.test_epoch_end(outs)
+        
     def configure_optimizers(self):
         if self.finetuning:
             parameter_groups = []

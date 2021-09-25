@@ -12,7 +12,7 @@ sns.set_theme(style="darkgrid")
 
 num_setups = 308
 
-folder_name = "unet_combinations_11_dropout"
+folder_name = "deeplab_sim_01_ft_grid"
 exp_name = f"{folder_name}_v1"
 experiment_folders = [#"/nrs/funke/wolfs2/lisl/experiments/unet_combinations_3/",
                       #"/nrs/funke/wolfs2/lisl/experiments/unet_combinations_5/"]

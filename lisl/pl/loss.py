@@ -58,7 +58,28 @@ class AnchorLoss(Module):
     def multiply_temperature(self, gamma):
         if self.temperature > 1.:
             self.temperature *= gamma
-            
+
+class AnchorPlusContrastiveLoss(AnchorLoss):
+    def forward(self, embedding, cont_embedding, abs_coords, patch_mask) -> Tensor:
+      
+        # compute all pairwise distances of anchor embeddings
+        dist = self.distance_fn(embedding, abs_coords)
+        # dist.shape = (b, p, p)
+
+        nonlinear_dist = self.nonlinearity(dist)
+        
+        # only matched patches (e.g. patches close in proximity)
+        # contripute to the loss
+        nonlinear_dist = nonlinear_dist[patch_mask == 1]
+
+
+
+        cont_embedding = 
+
+        nonlinear_dist = 
+
+        return nonlinear_dist.sum()
+
 class LinearAnchorLoss(AnchorLoss):
     def nonlinearity(self, distance):
         return distance

@@ -8,7 +8,7 @@ import torchvision.transforms as transforms
 from argparse import ArgumentParser
 import pytorch_lightning as pl
 from lisl.pl.trainer import SSLTrainer
-from lisl.pl.datamodules import MosaicDataModule, SSLDataModule
+import lisl.pl.datamodules
 from lisl.pl.utils import save_args, import_by_string, SaveModelOnValidation
 from lisl.pl.evaluation import SupervisedLinearSegmentationValidation, AnchorSegmentationValidation
 from lisl.pl.callbacks import Timing
@@ -17,7 +17,6 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks import ModelCheckpoint
 from test_tube import HyperOptArgumentParser
 import wandb
-# from pytorch_lightning.loggers import WandbLogger
 import json
 # pl.seed_everything(123)
 

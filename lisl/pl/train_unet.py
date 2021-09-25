@@ -67,4 +67,5 @@ if __name__ == '__main__':
     print("saving", filename)
     torch.save(model.model.state_dict(), filename)
 
-    test_results = trainer.test(ckpt_path=None)
+    test_results = trainer.test(model)
+    print("test_results", test_results)

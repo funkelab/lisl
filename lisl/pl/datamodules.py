@@ -5,7 +5,9 @@ from torch.utils.data import DataLoader
 from lisl.pl.dataset import (PatchedDataset, SparseChannelDataset, 
                              RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
                              DSBTrainAugmentations, DSBTestAugmentations,
-                             LargeDataset, AugmentedZarrEmbeddingDataset, AugmentedZarrDataset, ZarrEmbeddingDataset)
+                             LargeDataset, AugmentedZarrEmbeddingDataset,
+                             AugmentedZarrDataset, ZarrEmbeddingDataset,
+                             LiveCellDataset)
 from torchvision import transforms, datasets
 from lisl.pl.utils import QuantileNormalizeTorchTransform
 
@@ -219,6 +221,9 @@ class AnchorDataModule(pl.LightningDataModule):
         parser.add_argument('--patch_overlap', type=int, default=5)
         parser.add_argument('--positive_radius', type=int, default=64)
         parser.add_argument('--image_scale', type=float, default=1.)
+        parser.add_argument('--imgfolder', type=str)
+        parser.add_argument('--train_annotations', type=str)
+        parser.add_argument('--val_annotations', type=str)
 
         return parser
         
@@ -356,6 +361,51 @@ class CelebADataModule(AnchorDataModule):
 
       return dsb_train, dsb_val
 
+class LiveCellDataModule(AnchorDataModule):
+
+    def __init__(self,
+                 batch_size, dspath,
+                 image_folder=None,
+                 annotation_file=None,
+                 val_annotation_file=None,
+                 shape=(256, 256), loader_workers=10, positive_radius=32,
+                 image_scale=1., patch_size=16, patch_overlap=5):
+                 
+        super().__init__(batch_size,
+                         dspath,
+                         shape=shape,
+                         loader_workers=loader_workers,
+                         positive_radius=positive_radius,
+                         image_scale=image_scale,
+                         patch_size=patch_size,
+                         patch_overlap=patch_overlap)
+
+        self.image_folder = image_folder
+        self.annotation_file = annotation_file
+        self.val_annotation_file = val_annotation_file
+
+
+    def setup_datasets(self):   
+        train_ds = LiveCellDataset(self.image_folder,
+                                    self.annotation_file,
+                                    crop_to=self.shape)
+
+        val_ds = LiveCellDataset(self.image_folder,
+                                 self.val_annotation_file,
+                                 crop_to=(256, 256),
+                                 augment=False)
+
+        return train_ds, val_ds
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = super(LiveCellDataModule, LiveCellDataModule).add_model_specific_args(parent_parser)
+        parser.add_argument('--image_folder', type=str)
+        parser.add_argument('--annotation_file', type=str)
+        parser.add_argument('--val_annotation_file', type=str)
+
+        return parser
+
 
 class PrecomputedThreeClassDataModule(pl.LightningDataModule):
 
@@ -404,7 +454,10 @@ class PrecomputedThreeClassDataModule(pl.LightningDataModule):
                           shuffle=True)
     
     def val_dataloader(self):
-        return None 
+        return DataLoader(self.test,
+                          batch_size=1,
+                          num_workers=1,
+                          shuffle=False) 
 
     def test_dataloader(self):
         return DataLoader(self.test,
@@ -457,12 +510,10 @@ class ThreeClassDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         self.train = AugmentedZarrDataset(self.ds_file,
-                                          target_transform=self.target_transform,
                                           crop_to=self.crop_to,
                                           limit=self.limit)
 
         self.test = AugmentedZarrDataset(self.test_ds_file,
-                                        target_transform=self.target_transform,
                                         crop_to=None,
                                         augment=False)
 
@@ -473,7 +524,10 @@ class ThreeClassDataModule(pl.LightningDataModule):
                           shuffle=True)
     
     def val_dataloader(self):
-        return None 
+        return DataLoader(self.test,
+                          batch_size=1,
+                          num_workers=1,
+                          shuffle=False) 
 
     def test_dataloader(self):
         return DataLoader(self.test,
@@ -502,3 +556,60 @@ class ThreeClassDataModule(pl.LightningDataModule):
 
         return parser
 
+
+# class LiveCellDataModule(pl.LightningDataModule):
+
+#     def __init__(self, batch_size, image_folder,
+#                  annotation_file, loader_workers, val_annotation_file,
+#                  test_annotation_file, target_transform=None, 
+#                  crop_to=(256, 256), ds_limit=None):
+
+#         super().__init__()
+#         self.batch_size = batch_size
+#         self.image_folder = image_folder
+#         self.annotation_file = annotation_file
+#         self.target_transform = target_transform
+#         self.crop_to = crop_to
+#         self.loader_workers = loader_workers
+
+#         self.test_annotation_file = test_annotation_file
+#         self.limit = ds_limit
+
+#     def setup(self, stage=None):
+
+
+#     def train_dataloader(self):
+#         return DataLoader(self.train,
+#                           batch_size=self.batch_size,
+#                           num_workers=self.loader_workers,
+#                           shuffle=True)
+    
+#     def val_dataloader(self):
+#         return None 
+
+#     def test_dataloader(self):
+#         return DataLoader(self.test,
+#                           batch_size=1,
+#                           num_workers=1,
+#                           shuffle=False)
+
+
+#     @staticmethod
+#     def add_model_specific_args(parent_parser):
+#         parser = argparse.ArgumentParser(
+#             parents=[parent_parser], add_help=False)
+#         try:
+#             parser.add_argument('--batch_size', type=int, default=8)
+#         except argparse.ArgumentError:
+#             pass
+
+#         parser.add_argument('--loader_workers', type=int, default=8)
+#         parser.add_argument('--image_folder', type=str, required=True)
+#         parser.add_argument('--annotation_file', type=str, required=True)
+#         parser.add_argument('--val_annotation_file', type=str, required=False, default=None)
+#         parser.add_argument('--test_annotation_file', type=str, required=True)
+#         parser.add_argument('--target_transform', type=str, default=None)
+#         parser.add_argument('--crop_to', default=(256, 256))
+#         parser.add_argument('--ds_limit', default=None, type=int, nargs='+')
+
+#         return parser

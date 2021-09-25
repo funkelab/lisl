@@ -5,7 +5,6 @@ import math
 
 def run(options,
         data_module,
-        dspath,
         lr,
         patchsize,
         regularization,
@@ -28,7 +27,9 @@ def run(options,
     args += f" --patch_overlap {patchsize-stride}"
     args += f" --positive_radius {positive_radius}"
     args += f" --dataset {data_module}"
-    args += f" --dspath {dspath}"
+    # args += f" --image_folder {image_folder}"
+    # args += f" --annotation_file {annotation_file}"
+    # args += f" --test_annotation_file {test_annotation_file}"
     args += f" --regularization {regularization}"
     args += f" --image_scale {image_scale}"
     args += f" --resnet_size {resnet_size}"
@@ -39,7 +40,7 @@ def run(options,
     args += f" --val_patch_inference_steps 200 "
     args += f" --lr_milestones 25 50 75 90 100"
     args += f" --batch_size {batch_size}"
-    args += f" --loader_workers {11*ngpu}"
+    args += f" --loader_workers {8*ngpu}"
     args += f" --gpu {ngpu}"
 
     print(f"setting up {options.base_dir} {experiment_number}")
@@ -90,31 +91,49 @@ if __name__ == '__main__':
     base_positive_radius = 10
     ngpu = 4
     batch_size = 12
-    check_val_every_n_epoch = 10
-    max_epochs = 120
-    dsmodule = "LargeDataModule"
+    check_val_every_n_epoch = 25
+    max_epochs = 1200
+    dsmodule = "LiveCellDataModule"
     resnet_size = 101
 
-    for dspath in ["/nrs/funke/wolfs2/lisl/datasets/collection", "/nrs/funke/wolfs2/lisl/datasets/sim"]:
-        run(options=options,
-            data_module=dsmodule,
-            dspath=dspath,
-            lr=base_lr,
-            patchsize=base_patchsize,
-            regularization=base_regularization,
-            positive_radius=int(base_positive_radius),
-            image_scale=base_image_scale,
-            out_channels=2,
-            stride=base_stride,
-            # train_time_augmentation="nothing",
-            temperature=base_temperature,
-            temperature_decay=base_temperature_decay,
-            check_val_every_n_epoch=check_val_every_n_epoch,
-            max_epochs=max_epochs,
-            resnet_size=resnet_size,
-            batch_size=batch_size,
-            ngpu=ngpu)
-        experiment_number += 1
+    # for dspath in ["/nrs/funke/wolfs2/lisl/datasets/collection", "/nrs/funke/wolfs2/lisl/datasets/sim"]:
+    #     run(options=options,
+    #         data_module=dsmodule,
+    #         dspath=dspath,
+    #         lr=base_lr,
+    #         patchsize=base_patchsize,
+    #         regularization=base_regularization,
+    #         positive_radius=int(base_positive_radius),
+    #         image_scale=base_image_scale,
+    #         out_channels=2,
+    #         stride=base_stride,
+    #         # train_time_augmentation="nothing",
+    #         temperature=base_temperature,
+    #         temperature_decay=base_temperature_decay,
+    #         check_val_every_n_epoch=check_val_every_n_epoch,
+    #         max_epochs=max_epochs,
+    #         resnet_size=resnet_size,
+    #         batch_size=batch_size,
+    #         ngpu=ngpu)
+    #     experiment_number += 1
+
+    run(options=options,
+        data_module=dsmodule,
+        lr=base_lr,
+        patchsize=base_patchsize,
+        regularization=base_regularization,
+        positive_radius=int(base_positive_radius),
+        image_scale=base_image_scale,
+        out_channels=2,
+        stride=base_stride,
+        # train_time_augmentation="nothing",
+        temperature=base_temperature,
+        temperature_decay=base_temperature_decay,
+        check_val_every_n_epoch=check_val_every_n_epoch,
+        max_epochs=max_epochs,
+        resnet_size=resnet_size,
+        batch_size=batch_size,
+        ngpu=ngpu)
 
         # for temperature in np.linspace(1., 20, num=10):
         #     run(data_module=dsmodule,
