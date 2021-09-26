@@ -13,7 +13,10 @@ import matplotlib.pyplot as plt
 import time
 from skimage.io import imsave
 import numpy as np
-
+from lisl.pl.utils import cluster_embeddings, label2color
+from skimage.io import imsave
+import time
+    
 class AnchorLoss(Module):
     r"""
 
@@ -60,7 +63,13 @@ class AnchorLoss(Module):
             self.temperature *= gamma
 
 class AnchorPlusContrastiveLoss(AnchorLoss):
-    def forward(self, embedding, cont_embedding, abs_coords, patch_mask) -> Tensor:
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.ce = torch.nn.CrossEntropyLoss(ignore_index=-1)
+        self.weight = 0.1
+    
+    def forward(self, embedding, contr_emb, abs_coords, patch_mask) -> Tensor:
       
         # compute all pairwise distances of anchor embeddings
         dist = self.distance_fn(embedding, abs_coords)
@@ -72,13 +81,31 @@ class AnchorPlusContrastiveLoss(AnchorLoss):
         # contripute to the loss
         nonlinear_dist = nonlinear_dist[patch_mask == 1]
 
+        loss = nonlinear_dist.sum()
 
+        if contr_emb is None:
+            return loss
 
-        cont_embedding = 
+        cluster_labels = cluster_embeddings(embedding + abs_coords)
+        contr_emb = F.normalize(contr_emb, dim=-1)
+        cum_mean_clusters = []
+        
+        for b in range(len(embedding)):
+            with torch.no_grad():
+                mean_clusters = [contr_emb[b, cluster_labels[b]==i].mean(axis=0) for i in np.unique(cluster_labels[b]) if i >= 0]
+                mean_clusters = torch.stack(mean_clusters, dim=-1)
+                cum_mean_clusters.append(mean_clusters)
 
-        nonlinear_dist = 
+        cum_mean_clusters = torch.cat(cum_mean_clusters, dim=-1)
+        stacked_contr_emb = contr_emb.view(-1, cum_mean_clusters.shape[0])
+        logits = torch.matmul(stacked_contr_emb, cum_mean_clusters)
+        target = torch.from_numpy(np.concatenate(cluster_labels, axis=0)).long().to(logits.device)
+        print(cum_mean_clusters.shape, stacked_contr_emb.shape, logits.shape, target.shape)
+        print(np.unique(target.cpu().numpy()))
+        bce_loss = self.ce(logits, target)
+        loss += self.weight * bce_loss
 
-        return nonlinear_dist.sum()
+        return loss
 
 class LinearAnchorLoss(AnchorLoss):
     def nonlinearity(self, distance):

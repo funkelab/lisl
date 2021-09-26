@@ -39,8 +39,7 @@ from lisl.pl.utils import (adapted_rand, vis,
 from ctcmetrics.seg import seg_metric
 from sklearn.decomposition import PCA
 from lisl.pl.evaluation import compute_3class_segmentation
-from lisl.pl.loss import AnchorLoss
-from lisl.pl.loss import AnchorLoss, SineAnchorLoss
+from lisl.pl.loss import AnchorLoss, AnchorPlusContrastiveLoss
 from lisl.pl.loss_supervised import SupervisedInstanceEmbeddingLoss
 
 from torch.optim.lr_scheduler import MultiStepLR
@@ -54,6 +53,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     def __init__(self, loss_name="CPC",
                        unet_type="gp",
                        distance=8,
+                       n_heads=1,
                        head_layers=4,
                        vit_depth=8,
                        encoder_layers=2,
@@ -82,6 +82,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.out_channels = out_channels
         self.ndim = ndim
         self.last_val_log = -1
+        self.n_heads = n_heads
         self.head_layers = head_layers
         self.vit_depth = vit_depth
         self.encoder_layers = encoder_layers
@@ -120,11 +121,12 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     @staticmethod
     def add_model_specific_args(parser):
         # parser.add_argument('--n_workers', type=int, default=10)
+        parser.add_argument('--n_heads', default=1, type=int)
         parser.add_argument('--head_layers', default=2, type=int)
         parser.add_argument('--encoder_layers', default=2, type=int)
         parser.add_argument('--vit_depth', type=int, default=0)
         parser.add_argument('--ndim', type=int, default=2)
-        parser.add_argument('--out_channels', type=int, default=64)
+        parser.add_argument('--out_channels', type=int, nargs='+')
         parser.add_argument('--distance', type=int, default=8)
         parser.add_argument('--in_channels', type=int, default=1)
         parser.add_argument('--initial_lr', type=float, default=1e-4)
@@ -146,24 +148,26 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
     def forward(self, x):
         return self.model(x)[1]
 
-    def forward_patches(self, x, abs_coords, img=None, vis=False):
+    def forward_patches(self, x, img=None, vis=False):
         # expects input in the shape of
         # x.shape = 
         # (batch, patch_size, channels, patch_width, patch_height)
         b, p, c, pw, ph = x.shape
-        z, out_0 = self.model.forward(x.view(-1, c, pw, ph))
-        out_0 = out_0.view(b, p, self.out_channels)
-        if abs_coords is None or self.spatial_transformer is None:
+        z, outs = self.model.forward(x.view(-1, c, pw, ph))
+        has_multiple_outputs = isinstance(outs, tuple)
+
+        if has_multiple_outputs:
+            out_0 = outs[0].view(b, p, -1)
+            outs = tuple(o.view(b, p, -1) for o in outs[1:])
+            return out_0, outs 
+        else:
+            out_0 = outs.view(b, p, -1)
             return out_0, None
-        z = z.view(b, p, -1)
-        z, out_1 = self.spatial_transformer(z, out_0 + abs_coords)
-        out_1 = out_1 - abs_coords
-        out_1 = out_1.view(b, p, self.out_channels)
-        return out_0, out_1
 
     def build_models(self):
         self.model = PatchedResnet(self.in_channels,
                                     self.out_channels,
+                                    n_heads=self.n_heads,
                                     pretrained=self.pretrained_model,
                                     resnet_size=self.resnet_size)
 
@@ -179,7 +183,10 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         # self.anchor_loss = SineAnchorLoss(self.temperature,
         #                                   self.loss_direction_vector_file,
         #                                   self.loss_distances_file)
-        self.anchor_loss = AnchorLoss(self.temperature)
+        if self.loss_name == "anchorandcontrasive":
+            self.anchor_loss = AnchorPlusContrastiveLoss(self.temperature)
+        else:
+            self.anchor_loss = AnchorLoss(self.temperature)
 
     def training_step(self, batch, batch_nb):
 
@@ -189,7 +196,6 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         x, patches, abs_coords, patch_matches, mask = batch
 
         emb_0, emb_1 = self.forward_patches(patches,
-                                            abs_coords,
                                             x,
                                             vis=(self.global_step % 100 == 0))
 
@@ -208,50 +214,24 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                 abs_coords[b].detach().cpu().numpy(),
                                 x[b].detach().cpu().numpy(),
                                 grad=-grad_input[b, ..., c:c+2].detach().cpu().numpy(),
-                                output_file=[f"{img_directory}/grad_{self.global_step}_{b}_{c}.jpg"])
+                                output_file=[f"{img_directory}/grad_{self.global_step}_{self.local_rank}_{b}_{c}.jpg"])
                     handle.remove()
 
                 handle = emb_0.register_hook(log_hook)
-
-            if emb_1 is not None and emb_1.requires_grad:
-                def log_hook(grad_input):
-                    img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
-                                                                 os.pardir,
-                                                                 os.pardir,
-                                                                 "img"))
-
-                    os.makedirs(img_directory, exist_ok=True)
-                    for b in range(len(emb_1)):
-                        for c in range(0, emb_1.shape[-1]-1, 2):
-                            vis_anchor_embedding(emb_1[b, ..., c:c+2].detach().cpu().numpy(),
-                                                 abs_coords[b].detach(
-                            ).cpu().numpy(),
-                                x[b].detach().cpu().numpy(),
-                                grad=-grad_input[b, ..., c:c +
-                                                 2].detach().cpu().numpy(),
-                                output_file=[f"{img_directory}/vi_grad_{self.global_step}_{b}_{c}.jpg"])
-                    handle.remove()
-
-                handle = emb_1.register_hook(log_hook)
-
             
         # detach masked  boundary patches
         emb_0 = ((mask[..., None]).float() * emb_0.detach()) + \
             ((~mask[..., None]).float() * emb_0)
-        anchor_loss = self.anchor_loss(emb_0, abs_coords, patch_matches)
         if emb_1 is not None:
-            emb_1 = ((mask[..., None]).float() * emb_1.detach()) + ((~mask[..., None]).float() * emb_1)
-            anchor_loss = anchor_loss + \
-                self.anchor_loss(emb_1, abs_coords, patch_matches)
-
+            anchor_loss = self.anchor_loss(emb_0, emb_1[0], abs_coords, patch_matches)
+        else:
+            anchor_loss = self.anchor_loss(emb_0, abs_coords, patch_matches)
+            
         self.log('anchor_loss', anchor_loss.detach(), on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('anchor_loss_temperature', self.anchor_loss.temperature, on_step=True, prog_bar=True, logger=True)
 
         if self.regularization > 0.:
             reg_loss = self.regularization * emb_0.norm(2, dim=-1).sum()
-            if emb_1 is not None:
-                reg_loss = reg_loss + self.regularization * \
-                    emb_1.norm(2, dim=-1).sum()
             loss = anchor_loss + reg_loss
             self.log('reg_loss', reg_loss.detach(), on_step=True, prog_bar=True, logger=True)
         else:
@@ -277,14 +257,16 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                                                  ::self.val_patch_inference_downsample]
 
             if self.val_patch_inference_steps is not None:
-                embedding = self.sliced_cpu_forward_patches(
-                    patches, abs_coords)
+                embedding = self.sliced_cpu_forward_patches(patches)
                 abs_coords = abs_coords.cpu()
                 patch_matches = patch_matches.cpu()
             else:
-                embedding, _ = self.forward_patches(patches, abs_coords)
+                embedding, _ = self.forward_patches(patches)
 
-            loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+            if self.loss_name == "anchorandcontrasive":
+                loss = self.anchor_loss(embedding, None, abs_coords, patch_matches)
+            else:
+                loss = self.anchor_loss(embedding, abs_coords, patch_matches)
             self.log('val_anchor_loss', loss.detach(), on_epoch=True, prog_bar=False, logger=True)
             for margin in [1., 5., 10, 20., 40]:
                 self.validation_loss.push_margin = margin
@@ -304,7 +286,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
         return [optimizer], [scheduler]
 
-    def sliced_cpu_forward_patches(self, patches, abs_coords):
+    def sliced_cpu_forward_patches(self, patches):
         vpis = self.val_patch_inference_steps
         # apply forward patch on small slices to  
         # reduce memory footprint

@@ -268,7 +268,8 @@ class AnchorSegmentationValidation(Callback):
 
     def predict_embedding(self, batch, pl_module, patch_size):
 
-        edim = pl_module.out_channels
+        edim = pl_module.out_channels[0]
+        second_head = len(pl_module.out_channels) > 1
 
         with torch.no_grad():
             x, patches, abs_coords, patch_matches, mask, y = batch
@@ -284,6 +285,8 @@ class AnchorSegmentationValidation(Callback):
                           dilation=1)
 
             embedding_relative = torch.empty((x.shape[0], edim) + x.shape[-2:])
+            if second_head:
+                embedding_contr = torch.empty((x.shape[0], pl_module.out_channels[1]) + x.shape[-2:])
             embedding = None
             
             for i in range(x.shape[-2]):
@@ -296,7 +299,7 @@ class AnchorSegmentationValidation(Callback):
                                            i * torch.ones((x.shape[-1], )).float()), dim=-1)[None]
                 coordinates = coordinates.to(patches.device)
 
-                pred_i, _ = pl_module.forward_patches(patches, coordinates)
+                pred_i, pred_i_contr = pl_module.forward_patches(patches, coordinates)
                 pred_i_abs = pl_module.anchor_loss.absoute_embedding(pred_i, coordinates)
                 abs_edim = pred_i_abs.shape[-1]
                 if embedding is None:
@@ -306,9 +309,14 @@ class AnchorSegmentationValidation(Callback):
                 pred_i_abs = pred_i_abs.to(embedding.device)
 
                 embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
+                if second_head:
+                    embedding_contr[:, :, i] = pred_i_contr[0].permute(0, 2, 1).view(b, pl_module.out_channels[1], x.shape[-1])
                 embedding[:, :, i] = pred_i_abs.permute(0, 2, 1).view(b, abs_edim, x.shape[-1])
 
-        return embedding, embedding_relative
+        if not second_head:
+            embedding_contr = None
+
+        return embedding, embedding_relative, embedding_contr
 
     def create_eval_dir(self, pl_module):
         eval_directory = os.path.abspath(os.path.join(pl_module.logger.log_dir,
@@ -483,15 +491,17 @@ class AnchorSegmentationValidation(Callback):
 
         eval_directory = self.create_eval_dir(pl_module)
 
-        embedding, embedding_relative = self.predict_embedding(batch,
+        embedding, embedding_relative, embedding_contr = self.predict_embedding(batch,
                                                                pl_module,
                                                                trainer.datamodule.patch_size)
         
         vis_pointer_filename = f"{eval_directory}/pointer_embedding_{batch_idx}_{pl_module.local_rank}"
         vis_embedding_filename = f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}"
-        vis_relembedding_filename = f"{eval_directory}/embedding_relative_{batch_idx}_{pl_module.local_rank}"
+        vis_contr_embedding_filename = f"{eval_directory}/contrastive_embedding_{batch_idx}_{pl_module.local_rank}"
+        vis_relembedding_filename = f"{eval_directory}/relative_embedding_{batch_idx}_{pl_module.local_rank}"
         self.visualize_embedding_vectors(embedding_relative, x, vis_pointer_filename)
         self.visualize_embeddings(embedding, x, vis_embedding_filename)
+        self.visualize_embeddings(embedding_contr, x, vis_contr_embedding_filename)
         self.visualize_embeddings(embedding_relative, x, vis_relembedding_filename)
         
         eval_data_file = f"{eval_directory}/embedding_{batch_idx}_{pl_module.local_rank}.zarr"

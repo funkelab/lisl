@@ -22,7 +22,6 @@ def run(options,
         ngpu):
 
     args = options.args + f" --initial_lr {lr}"
-    args += f" --out_channels {out_channels}"
     args += f" --patch_size {patchsize}"
     args += f" --patch_overlap {patchsize-stride}"
     args += f" --positive_radius {positive_radius}"

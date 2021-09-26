@@ -17,7 +17,7 @@ from inferno.io.transform.base import Transform
 from skimage.transform import rescale
 from functools import partial
 from pytorch_lightning.callbacks import Callback
-
+from sklearn.cluster import DBSCAN
 
 def offset_slice(offset, reverse=False, extra_dims=0):
     def shift(o):
@@ -569,3 +569,34 @@ def get_augmentation_transform():
             ],
             random_order=True
         )
+
+def cluster_embeddings(embeddings, eps=2, min_samples=5):
+
+    batch_of_clusters = []
+    # we assume input embeddings are in the form (b, p, c)
+    start_label = 0
+    for emb in embeddings:
+        # emb.shape = (p, c)
+        emb = emb.detach().cpu().numpy()
+        clusters = DBSCAN(eps=eps,
+                          min_samples=min_samples).fit_predict(emb)
+
+        # check that clusters are consecutive
+        a = np.unique(clusters)        
+        assert(a[a>=0].max() + 1 == len(a[a>=0]))
+
+        # offset labels by previous maximum label
+        clusters[clusters>=0] += start_label
+        # check consistency
+        if len(batch_of_clusters):
+            a = np.unique(batch_of_clusters[-1])
+            b = np.unique(clusters)
+            assert(not np.isin(a[a>=0], b[b>=0]).any())
+        
+        batch_of_clusters.append(clusters)
+
+        start_label = clusters.max() + 1
+
+    return batch_of_clusters
+
+    

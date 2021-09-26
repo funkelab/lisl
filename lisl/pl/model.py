@@ -51,12 +51,15 @@ class PatchedResnet(nn.Module):
             self,
             in_channels,
             out_channels,
+            n_heads=1,
             resnet_size=50,
-            pretrained=False):
+            pretrained=False,
+            heads=1):
 
         super().__init__()
 
         assert hasattr(models, f"resnet{resnet_size}")
+        assert(len(out_channels) == n_heads)
         model = getattr(models, f"resnet{resnet_size}")(pretrained=pretrained)
         self.features_in_last_layer = list(model.children())[-1].in_features
 
@@ -73,10 +76,10 @@ class PatchedResnet(nn.Module):
         # Commonly used Non-linear projection head
         # see https://arxiv.org/pdf/1906.00910.pdf
         # or https://arxiv.org/pdf/2002.05709.pdf
-        self.head = torch.nn.Sequential(
+        self.heads = nn.ModuleList([torch.nn.Sequential(
             nn.Linear(self.features_in_last_layer, self.features_in_last_layer),
             nn.ReLU(),
-            nn.Linear(self.features_in_last_layer, out_channels))
+            nn.Linear(self.features_in_last_layer, out_channels[i])) for i in range(n_heads)])
 
         self.patchsize = 16
         self.add_spatial_dim = False
@@ -96,13 +99,16 @@ class PatchedResnet(nn.Module):
         # get output directly after avg pooling layer
         # h.shape == (minibatch, features_in_last_layer)
 
-        # apply small MLP
-        z = self.head(h)
-        # z.shape = (minibatch, outchannels)
-        if self.add_spatial_dim:
-            return h[..., None, None], z[..., None, None]
-
-        return h, z
+        if len(self.heads) > 1:
+            zs = tuple(head(h) for head in self.heads)
+            return h, zs
+        else:
+            # apply small MLP
+            z = self.head(h)
+            # z.shape = (minibatch, outchannels)
+            if self.add_spatial_dim:
+                return h[..., None, None], z[..., None, None]
+            return h, z
 
     def patch_and_forward(self, image):
 
