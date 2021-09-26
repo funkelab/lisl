@@ -192,7 +192,7 @@ class AnchorDataModule(pl.LightningDataModule):
                           shuffle=True,
                           batch_size=self.batch_size,
                           num_workers=self.loader_workers,
-                          worker_init_fn=pl.utilities.seed.seed_everything,
+                        #   worker_init_fn=pl.utilities.seed.seed_everything,
                           drop_last=False)
 
     def val_dataloader(self):
@@ -200,7 +200,7 @@ class AnchorDataModule(pl.LightningDataModule):
                           batch_size=1,
                           shuffle=False,
                           num_workers=2,
-                          worker_init_fn=pl.utilities.seed.seed_everything,
+                        #   worker_init_fn=pl.utilities.seed.seed_everything,
                           drop_last=False)
 
     def test_dataloader(self):

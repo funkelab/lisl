@@ -282,7 +282,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         return {'val_loss': loss}
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=self.initial_lr, weight_decay=0.01)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.initial_lr, weight_decay=0.01)
         scheduler = MultiStepLR(optimizer, milestones=self.lr_milestones, gamma=0.1)
         return [optimizer], [scheduler]
 

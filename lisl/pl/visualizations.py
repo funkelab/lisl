@@ -17,7 +17,7 @@ def vis_anchor_embedding(embedding, patch_coords, img, grad=None, output_file=No
       if img.shape[0] not in [3]:
         plt.imshow(img[0], cmap='magma', interpolation='nearest')
       else:
-        plt.imshow(np.transpose(img, (2, 1, 0)), interpolation='nearest')
+        plt.imshow(np.transpose(img, (1, 2, 0)), interpolation='nearest')
 
     if isinstance(embedding, list):
       for e in embedding:

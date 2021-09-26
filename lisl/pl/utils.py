@@ -545,21 +545,18 @@ def get_augmentation_transform():
                         iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)), # emboss images
                         # search either for all edges or for directed edges,
                         # blend the result with the original image using a blobby mask
-                        iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*1.), per_channel=0.5), # add gaussian noise to images
+                        iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*1.), per_channel=False), # add gaussian noise to images
+                        iaa.Dropout((0.01, 0.1), per_channel=False), # randomly remove up to 10% of the pixels
+                        iaa.Add((-1, 1), per_channel=False), # change brightness of images (by -10 to 10 of original value)
                         iaa.OneOf([
-                            iaa.Dropout((0.01, 0.1), per_channel=0.5), # randomly remove up to 10% of the pixels
-                            iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=0.2),
-                        ]),
-                        iaa.Add((-1, 1), per_channel=0.5), # change brightness of images (by -10 to 10 of original value)
-                        iaa.OneOf([
-                            iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                            iaa.Multiply((0.5, 1.5), per_channel=False),
                             iaa.FrequencyNoiseAlpha(
                                 exponent=(-4, 0),
-                                first=iaa.Multiply((0.5, 1.5), per_channel=True),
+                                first=iaa.Multiply((0.5, 1.5)),
                                 second=iaa.LinearContrast((0.5, 2.0))
                             )
                         ]),
-                        iaa.LinearContrast((0.5, 2.0), per_channel=0.5), # improve or worsen the contrast
+                        iaa.LinearContrast((0.5, 2.0), per_channel=False), # improve or worsen the contrast
                         sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)), # move pixels locally around (with random strengths)
                         sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))), # sometimes move parts of the image around
                         sometimes(iaa.PerspectiveTransform(scale=(0.01, 0.1)))

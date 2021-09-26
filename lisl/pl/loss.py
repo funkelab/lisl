@@ -100,8 +100,6 @@ class AnchorPlusContrastiveLoss(AnchorLoss):
         stacked_contr_emb = contr_emb.view(-1, cum_mean_clusters.shape[0])
         logits = torch.matmul(stacked_contr_emb, cum_mean_clusters)
         target = torch.from_numpy(np.concatenate(cluster_labels, axis=0)).long().to(logits.device)
-        print(cum_mean_clusters.shape, stacked_contr_emb.shape, logits.shape, target.shape)
-        print(np.unique(target.cpu().numpy()))
         bce_loss = self.ce(logits, target)
         loss += self.weight * bce_loss
 

@@ -37,7 +37,7 @@ def run(options,
     args += f" --temperature {temperature}"
     args += f" --temperature_decay {temperature_decay}"
     args += f" --val_patch_inference_steps 200 "
-    args += f" --lr_milestones 25 50 75 90 100"
+    args += f" --lr_milestones 250 500 1000"
     args += f" --batch_size {batch_size}"
     args += f" --loader_workers {8*ngpu}"
     args += f" --gpu {ngpu}"
@@ -75,7 +75,7 @@ if __name__ == '__main__':
 
     experiment_number = 0
 
-    base_lr = 1e-6
+    base_lr = 1e-5
     base_patchsize = 16
     base_regularization = .02
     base_image_scale = 1.
@@ -89,7 +89,7 @@ if __name__ == '__main__':
     base_temperature_decay = 1.
     base_positive_radius = 10
     ngpu = 4
-    batch_size = 12
+    batch_size = 4
     check_val_every_n_epoch = 25
     max_epochs = 1200
     dsmodule = "LiveCellDataModule"
