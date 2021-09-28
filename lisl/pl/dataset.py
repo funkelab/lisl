@@ -1143,6 +1143,71 @@ class LiveCellDataset(Dataset):
             tc = self.target_tf(gt_segmentation)
             return raw, raw, tc, gt_segmentation
 
+class TissueNetDataset(Dataset):
+
+    def __init__(self,
+                 image_file,
+                 target_transform=None,
+                 crop_to=None,
+                 augment=True,
+                 limit=None):
+
+        super().__init__()
+
+        self.target_transform = target_transform
+        if target_transform == 'threeclass':
+            self.target_tf = Threeclass(inner_distance=2)
+        elif target_transform == 'stardist':
+            self.target_tf = StardistTf()
+
+        self.norm = QuantileNormalize(apply_to=[0])
+        assert(limit is None)
+        self.augment = augment
+
+        if crop_to is not None:
+            self.crop_fn = iaa.CropToFixedSize(width=crop_to[0], height=crop_to[1])
+        else:
+            self.crop_fn = None
+            
+        self.batch_augmentation_fn = get_augmentation_transform()
+        self.load_data(image_file)
+        
+    def __len__(self):
+        if not hasattr(self, "_length"):
+            self._length = self.raw_data.shape[0]
+        return self._length
+
+    def load_data(self, image_file):
+        with np.load(image_file) as data:
+            self.raw_data = data['X']#np.transpose(, (0, 3, 1, 2))
+            self.gt_data = data['y'][..., 0]
+
+    def augment_batch(self, raw, gtseg):
+        # prepare images for iaa transform
+        gtseg = gtseg[None, ..., None] # CHW -> HWC            
+        if self.augment:
+            raw, gtseg = self.batch_augmentation_fn(image=raw,
+                                                    segmentation_maps=gtseg)
+        if self.crop_fn is not None:
+            raw, gtseg = self.crop_fn(image=raw,
+                                      segmentation_maps=gtseg)
+        raw = np.transpose(raw, [2,0,1]) # HWC -> CHW
+        raw = self.norm(raw)
+        gtseg = gtseg[0, ..., 0]
+
+        return raw, gtseg
+
+    def __getitem__(self, idx):
+        raw = self.raw_data[idx]
+        gt_segmentation = self.gt_data[idx]
+        raw, gt_segmentation = self.augment_batch(raw, gt_segmentation)
+
+        if self.target_transform is None:
+            return raw, gt_segmentation
+        else:
+            tc = self.target_tf(gt_segmentation)
+            return raw, raw, tc, gt_segmentation
+
 if __name__ == '__main__':
 
     ds = AugmentedZarrEmbeddingDataset(ds_file_prefix="/nrs/funke/wolfs2/lisl/datasets/fast_dsb_coord_aug_",

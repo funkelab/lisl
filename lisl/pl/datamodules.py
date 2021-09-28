@@ -1,13 +1,14 @@
 import argparse
 import pytorch_lightning as pl
 import torch
+import os
 from torch.utils.data import DataLoader
 from lisl.pl.dataset import (PatchedDataset, SparseChannelDataset, 
                              RandomShiftDataset, DSBDataset, UsiigaciDataset, Bbbc010Dataset,
                              DSBTrainAugmentations, DSBTestAugmentations,
                              LargeDataset, AugmentedZarrEmbeddingDataset,
                              AugmentedZarrDataset, ZarrEmbeddingDataset,
-                             LiveCellDataset)
+                             LiveCellDataset, TissueNetDataset)
 from torchvision import transforms, datasets
 from lisl.pl.utils import QuantileNormalizeTorchTransform
 
@@ -406,6 +407,17 @@ class LiveCellDataModule(AnchorDataModule):
 
         return parser
 
+class TissueNetDataModule(AnchorDataModule):
+
+    def setup_datasets(self):   
+        train_ds = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_train.npz"),
+                                   crop_to=self.shape)
+
+        val_ds = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_val.npz"),
+                                 crop_to=(256, 256),
+                                 augment=False)
+
+        return train_ds, val_ds
 
 class PrecomputedThreeClassDataModule(pl.LightningDataModule):
 

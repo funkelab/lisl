@@ -39,7 +39,7 @@ def run(options,
     args += f" --val_patch_inference_steps 200 "
     args += f" --lr_milestones 250 500 1000"
     args += f" --batch_size {batch_size}"
-    args += f" --loader_workers {8*ngpu}"
+    args += f" --loader_workers {4*ngpu}"
     args += f" --gpu {ngpu}"
 
     print(f"setting up {options.base_dir} {experiment_number}")
@@ -92,7 +92,7 @@ if __name__ == '__main__':
     batch_size = 4
     check_val_every_n_epoch = 25
     max_epochs = 1200
-    dsmodule = "LiveCellDataModule"
+    dsmodule = "TissueNetDataModule"
     resnet_size = 101
 
     # for dspath in ["/nrs/funke/wolfs2/lisl/datasets/collection", "/nrs/funke/wolfs2/lisl/datasets/sim"]:
