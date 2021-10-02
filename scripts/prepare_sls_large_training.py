@@ -37,7 +37,7 @@ def run(options,
     args += f" --temperature {temperature}"
     args += f" --temperature_decay {temperature_decay}"
     args += f" --val_patch_inference_steps 200 "
-    args += f" --lr_milestones 250 500 1000"
+    args += f" --lr_milestones 40 80 120"
     args += f" --batch_size {batch_size}"
     args += f" --loader_workers {4*ngpu}"
     args += f" --gpu {ngpu}"
@@ -89,9 +89,9 @@ if __name__ == '__main__':
     base_temperature_decay = 1.
     base_positive_radius = 10
     ngpu = 4
-    batch_size = 4
-    check_val_every_n_epoch = 25
-    max_epochs = 1200
+    batch_size = 8
+    check_val_every_n_epoch = 10
+    max_epochs = 130
     dsmodule = "TissueNetDataModule"
     resnet_size = 101
 

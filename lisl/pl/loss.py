@@ -67,7 +67,7 @@ class AnchorPlusContrastiveLoss(AnchorLoss):
     def __init__(self, *args) -> None:
         super().__init__(*args)
         self.ce = torch.nn.CrossEntropyLoss(ignore_index=-1)
-        self.weight = 0.1
+        self.weight = 10.
     
     def forward(self, embedding, contr_emb, abs_coords, patch_mask) -> Tensor:
       

@@ -1161,7 +1161,14 @@ class TissueNetDataset(Dataset):
             self.target_tf = StardistTf()
 
         self.norm = QuantileNormalize(apply_to=[0])
-        assert(limit is None)
+        self.load_data(image_file)
+
+        self.limit = None
+        if limit is not None:
+            self.limit = limit[1] - limit[0]
+            self.offset = limit[0]
+            assert(self.limit + self.offset < len(self) + 1)
+        
         self.augment = augment
 
         if crop_to is not None:
@@ -1170,7 +1177,6 @@ class TissueNetDataset(Dataset):
             self.crop_fn = None
             
         self.batch_augmentation_fn = get_augmentation_transform()
-        self.load_data(image_file)
         
     def __len__(self):
         if not hasattr(self, "_length"):
@@ -1198,6 +1204,10 @@ class TissueNetDataset(Dataset):
         return raw, gtseg
 
     def __getitem__(self, idx):
+
+        if self.limit is not None:
+            idx = (idx % self.limit) + self.offset
+
         raw = self.raw_data[idx]
         gt_segmentation = self.gt_data[idx]
         raw, gt_segmentation = self.augment_batch(raw, gt_segmentation)

@@ -550,10 +550,10 @@ def get_augmentation_transform():
                         iaa.Add((-1, 1), per_channel=False), # change brightness of images (by -10 to 10 of original value)
                         iaa.OneOf([
                             iaa.Multiply((0.5, 1.5), per_channel=False),
-                            iaa.FrequencyNoiseAlpha(
+                            iaa.BlendAlphaFrequencyNoise(
                                 exponent=(-4, 0),
-                                first=iaa.Multiply((0.5, 1.5)),
-                                second=iaa.LinearContrast((0.5, 2.0))
+                                foreground=iaa.Multiply((0.5, 1.5)),
+                                background=iaa.LinearContrast((0.5, 2.0))
                             )
                         ]),
                         iaa.LinearContrast((0.5, 2.0), per_channel=False), # improve or worsen the contrast
@@ -567,7 +567,7 @@ def get_augmentation_transform():
             random_order=True
         )
 
-def cluster_embeddings(embeddings, eps=2, min_samples=5):
+def cluster_embeddings(embeddings, eps=4, min_samples=5):
 
     batch_of_clusters = []
     # we assume input embeddings are in the form (b, p, c)

@@ -164,7 +164,7 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
             elif self.segmentation_type == "stardist":
                 pred_grid = make_grid(y.detach().cpu()[:, [0, 8, -1]], nrow=len(y), normalize=True).permute(1, 2, 0).numpy()
             
-            raw_grid = make_grid(raw.detach().cpu(), normalize=True, nrow=len(
+            raw_grid = make_grid(raw[:, :1].detach().cpu(), normalize=True, nrow=len(
                 y), scale_each=True).permute(1, 2, 0).numpy()
             if self.segmentation_type == "threeclass":
                 target_grid = make_grid(target.detach().cpu()[:, None].float(), normalize=True, nrow=len(
@@ -205,6 +205,8 @@ class SSLUnetTrainer(pl.LightningModule, BuildFromArgparse):
 
     def test_step(self, batch, batch_nb):
 
+        print(len(batch))
+        print([x.shape for x in batch])
         raw, embedding, target, gt = batch
         y = self.forward(embedding)
         os.makedirs("test", exist_ok=True)

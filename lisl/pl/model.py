@@ -497,8 +497,10 @@ class FNC(nn.Module):
             new_key = get_new_key(k)
             tmodel[new_key] = tmodel.pop(k)
 
+        print(list(tmodel.keys()))
         for dk in ['classifier.1.weight', 'classifier.1.bias', 'classifier.4.weight', 'classifier.4.bias']:
-            del tmodel[dk]
+            if dk in tmodel:
+                del tmodel[dk]
 
         self.model.load_state_dict(tmodel, strict=False)
 
@@ -572,7 +574,8 @@ class Deeplab(nn.Module):
             tmodel[new_key] = tmodel.pop(k)
 
         for dk in ['classifier.1.weight', 'classifier.1.bias', 'classifier.4.weight', 'classifier.4.bias']:
-            del tmodel[dk]
+            if dk in tmodel:
+                del tmodel[dk]
 
         self.model.load_state_dict(tmodel, strict=False)
 

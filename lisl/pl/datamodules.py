@@ -411,13 +411,71 @@ class TissueNetDataModule(AnchorDataModule):
 
     def setup_datasets(self):   
         train_ds = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_train.npz"),
-                                   crop_to=self.shape)
+                                    crop_to=self.shape)
 
         val_ds = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_val.npz"),
                                  crop_to=(256, 256),
                                  augment=False)
 
         return train_ds, val_ds
+
+class TissueNetThreeClassDataModule(pl.LightningDataModule):
+
+    def __init__(self, batch_size, dspath, loader_workers, 
+                 target_transform="threeclass", ds_limit=None, crop_to=(256, 256)):
+        self.dspath = dspath 
+        self.loader_workers = loader_workers
+        self.batch_size = batch_size
+        self.target_transform = target_transform
+        self.ds_limit = ds_limit
+        self.crop_to = crop_to
+
+    def setup(self, stage=None):
+        self.train = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_train.npz"),
+                                      target_transform=self.target_transform,
+                                      limit=self.ds_limit,
+                                      crop_to=self.crop_to)
+
+        self.val = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_val.npz"),
+                                     target_transform=self.target_transform,
+                                     augment=False)
+
+        self.test = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_test.npz"),
+                                     target_transform=self.target_transform,
+                                     augment=False)
+
+    def train_dataloader(self):
+        return DataLoader(self.train,
+                          batch_size=self.batch_size,
+                          num_workers=self.loader_workers,
+                          shuffle=True)
+    
+    def val_dataloader(self):
+        return DataLoader(self.val,
+                          batch_size=1,
+                          num_workers=1,
+                          shuffle=False) 
+
+    def test_dataloader(self):
+        return DataLoader(self.test,
+                          batch_size=1,
+                          num_workers=1,
+                          shuffle=False)
+
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = argparse.ArgumentParser(
+            parents=[parent_parser], add_help=False)
+        try:
+            parser.add_argument('--batch_size', type=int, default=8)
+        except argparse.ArgumentError:
+            pass
+
+        parser.add_argument('--dspath', type=str, required=True)
+        parser.add_argument('--loader_workers', type=int, default=8)
+        parser.add_argument('--ds_limit', default=None, type=int, nargs='+')
+        return parser
 
 class PrecomputedThreeClassDataModule(pl.LightningDataModule):
 
