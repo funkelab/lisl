@@ -220,7 +220,6 @@ class SupervisedLinearSegmentationValidation(Callback, BuildFromArgparse):
                 predicted_seg = np.stack([compute_3class_segmentation(
                     i, b) for i, b in zip(inner, background)])
 
-
                 z_array.create_dataset(f"prediction_{n_samples:04d}", data=prediction, compression='gzip')
                 z_array.create_dataset(f"predicted_seg_{n_samples:04d}", data=predicted_seg, compression='gzip')
                 z_array.create_dataset(f"labels_{n_samples:04d}", data=labels, compression='gzip')
@@ -272,46 +271,12 @@ class AnchorSegmentationValidation(Callback):
         second_head = len(pl_module.out_channels) > 1
 
         with torch.no_grad():
-            x, patches, abs_coords, patch_matches, mask, y = batch
-
-            lp = (patch_size // 2)
-            rp = ((patch_size - 1) // 2)
-
-            # padd the image to get one patch corresponding to each pixel 
-            padded = F.pad(x, (lp, rp, lp, rp), mode='reflect')
-
-            pf = Patchify(patch_size=patch_size,
-                          overlap_size=patch_size-1,
-                          dilation=1)
-
-            embedding_relative = torch.empty((x.shape[0], edim) + x.shape[-2:])
-            if second_head:
-                embedding_contr = torch.empty((x.shape[0], pl_module.out_channels[1]) + x.shape[-2:])
-            embedding = None
-            
-            for i in range(x.shape[-2]):
-                patches = torch.stack(list(pf(x0) for x0 in padded[:, :, i:i+(patch_size)]))
-                # patches.shape = (batch_size, num_patches, 2, patch_width, patch_height)
-                b, p, c, pw, ph = patches.shape
-
-                patches = patches.contiguous().cuda()
-                coordinates = torch.stack((torch.arange(x.shape[-1]).float(),
-                                           i * torch.ones((x.shape[-1], )).float()), dim=-1)[None]
-                coordinates = coordinates.to(patches.device)
-
-                pred_i, pred_i_contr = pl_module.forward_patches(patches, coordinates)
-                pred_i_abs = pl_module.anchor_loss.absoute_embedding(pred_i, coordinates)
-                abs_edim = pred_i_abs.shape[-1]
-                if embedding is None:
-                    embedding = torch.empty((x.shape[0], abs_edim) + x.shape[-2:])
-
-                pred_i = pred_i.to(embedding_relative.device)
-                pred_i_abs = pred_i_abs.to(embedding.device)
-
-                embedding_relative[:, :, i] = pred_i.permute(0, 2, 1).view(b, edim, x.shape[-1])
-                if second_head:
-                    embedding_contr[:, :, i] = pred_i_contr[0].permute(0, 2, 1).view(b, pl_module.out_channels[1], x.shape[-1])
-                embedding[:, :, i] = pred_i_abs.permute(0, 2, 1).view(b, abs_edim, x.shape[-1])
+            x, abs_coords, patch_matches, mask, y = batch
+            embedding_relative = pl_module.forward(x.to(pl_module.device))
+            if isinstance(embedding_relative, tuple):
+                embedding_relative = embedding_relative[0]
+            embedding = embedding_relative
+            embedding_contr = embedding_relative
 
         if not second_head:
             embedding_contr = None
@@ -333,8 +298,13 @@ class AnchorSegmentationValidation(Callback):
         for b in range(len(embedding)):
             e = embedding[b].cpu().numpy()
             for c in range(0, embedding.shape[1], 2):
+                raw = x[b, 0].cpu().numpy()
+                if raw.shape[-1] != e.shape[-1]:
+                    pd0 = (raw.shape[-1] - e.shape[-1]) // 2
+                    pd1 = (raw.shape[-2] - e.shape[-2]) // 2
+                    raw = raw[..., pd1:-pd1, pd0:-pd0]
                 imsave(f"{filename}_{b}_{c}.jpg", 
-                       np.stack((n(e[c]), n(x[b, 0].cpu().numpy()), n(e[c+1])), axis=-1))
+                       np.stack((n(e[c]), n(raw), n(e[c+1])), axis=-1))
 
     def visualize_segmentation(self, seg, x, filename):
         colseg = label2color(seg).transpose(1, 2, 0)
@@ -352,7 +322,6 @@ class AnchorSegmentationValidation(Callback):
             cy = np.arange(e.shape[-1], dtype=np.float32)
             coords = np.meshgrid(cx, cy, copy=True)
             coords = np.stack(coords, axis=-1)
-            
             e_transposed = np.transpose(e, (1,2,0))
 
             dsf = downsample_factor
@@ -487,7 +456,7 @@ class AnchorSegmentationValidation(Callback):
 
     def full_evaluation(self, trainer, pl_module, batch, batch_idx, dataloader_idx):
 
-        x, patches, abs_coords, patch_matches, mask, y = batch
+        x, abs_coords, patch_matches, mask, y = batch
 
         eval_directory = self.create_eval_dir(pl_module)
 

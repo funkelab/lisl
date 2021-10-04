@@ -655,6 +655,7 @@ class PatchedDataset(Dataset):
                  patch_overlap,
                  positive_radius,
                  augment=True,
+                 crop_output_size=False,
                  add_negative_samples=False,
                  return_segmentation=True):
         """
@@ -677,8 +678,6 @@ class PatchedDataset(Dataset):
             self.neutral_radius = self.positive_radius * 2.
             self.negative_radius = self.positive_radius * 2.236
   
-
-
         self.patchify = Patchify(patch_size=patch_size,
                                  overlap_size=patch_overlap,
                                  dilation=1)
@@ -689,6 +688,7 @@ class PatchedDataset(Dataset):
         self._coords = None
         self._mask = None
         self._current_img_shape = None
+        self.crop_output_size = crop_output_size
 
     @property
     def coords(self):
@@ -703,8 +703,16 @@ class PatchedDataset(Dataset):
     def compute_connections_and_coordinates(self, img_shape):
 
         self._current_img_shape = img_shape
-        x = np.arange(img_shape[-1], dtype=np.float32)
-        y = np.arange(img_shape[-2], dtype=np.float32)
+
+        height = img_shape[-1]
+        width = img_shape[-2]
+
+        if self.crop_output_size:
+            height -= self.crop_output_size[0]
+            width -= self.crop_output_size[1]
+
+        x = np.arange(height, dtype=np.float32)
+        y = np.arange(width, dtype=np.float32)
 
         coords = np.meshgrid(x, y, copy=True)
         coords = np.stack(coords, axis=0)
@@ -720,7 +728,6 @@ class PatchedDataset(Dataset):
         # squared_distances.shape = (num_patches, num_patches)
 
         # turn squared_distances into connection matrix by thresholding
-
         if self.add_negative_samples:
             squared_distances[squared_distances > self.negative_radius**2] = 0
             squared_distances[squared_distances > self.neutral_radius**2] = -1
@@ -784,18 +791,16 @@ class PatchedDataset(Dataset):
 
     def __getitem__(self, index):
 
-        x,y = self.unpack(self.root_dataset[index])
+        x, y = self.unpack(self.root_dataset[index])
 
         conn_mat, abs_coords, mask = self.get_connections_and_coords(x.shape)
-        patches = self.patchify(x)
-
-        if self.augment:
-            patches = self.apply_patch_augmentation(patches.numpy())
+        # cast to long so we can use it to index
+        abs_coords = abs_coords.long()
 
         if self.return_segmentation:
-            return x, patches, abs_coords, conn_mat, mask, y
+            return x, abs_coords, conn_mat, mask, y
         else:
-            return x, patches, abs_coords, conn_mat, mask
+            return x, abs_coords, conn_mat, mask
 
 class Threeclass(Transform):
     """Convert segmentation to 3 class"""

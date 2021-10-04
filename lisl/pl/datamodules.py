@@ -151,7 +151,7 @@ class AnchorDataModule(pl.LightningDataModule):
 
     def __init__(self, batch_size, dspath,
                  shape=(256, 256), loader_workers=10, positive_radius=32,
-                 image_scale=1., patch_size=16, patch_overlap=5):
+                 image_scale=1., patch_size=16, patch_overlap=5, crop_output_size=(16, 16)):
 
         super().__init__()
         self.batch_size = batch_size
@@ -162,6 +162,7 @@ class AnchorDataModule(pl.LightningDataModule):
         self.patch_overlap = patch_overlap
         self.positive_radius = positive_radius
         self.scale = image_scale
+        self.crop_output_size = crop_output_size
 
     def setup_datasets(self):
       raise NotImplementedError()
@@ -177,6 +178,7 @@ class AnchorDataModule(pl.LightningDataModule):
                                 self.patch_overlap,
                                 self.positive_radius,
                                 augment=True,
+                                crop_output_size=self.crop_output_size,
                                 return_segmentation=False)
 
         self.ds_val = PatchedDataset(
@@ -186,6 +188,7 @@ class AnchorDataModule(pl.LightningDataModule):
                                 self.patch_overlap,
                                 self.positive_radius,
                                 augment=False,
+                                crop_output_size=self.crop_output_size,
                                 return_segmentation=True)
 
     def train_dataloader(self):
@@ -414,7 +417,7 @@ class TissueNetDataModule(AnchorDataModule):
                                     crop_to=self.shape)
 
         val_ds = TissueNetDataset(os.path.join(self.dspath, "tissuenet_v1.0_val.npz"),
-                                 crop_to=(256, 256),
+                                 crop_to=(252, 252),
                                  augment=False)
 
         return train_ds, val_ds

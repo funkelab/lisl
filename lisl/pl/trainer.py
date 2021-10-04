@@ -12,7 +12,7 @@ from torch.utils.data.distributed import DistributedSampler
 import random
 
 import pytorch_lightning as pl
-from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet
+from lisl.pl.model import MLP, get_unet_kernels, PatchedResnet, MultiHeadUnet
 from funlib.learn.torch.models import UNet
 
 from radam import RAdam
@@ -21,6 +21,7 @@ import numpy as np
 from skimage.io import imsave
 from tiktorch.models.dunet import DUNet
 import math
+from torchvision.utils import make_grid
 
 import itertools
 import os
@@ -69,6 +70,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                        resnet_size=18,
                        val_patch_inference_steps=None,
                        val_patch_inference_downsample=None,
+                       coordinate_offset_after_valid_unet=8,
                        loss_direction_vector_file="misc/direction_vectors.npy",
                        loss_distances_file="misc/distances.npy",
                        lr_milestones=(100)):
@@ -97,6 +99,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         self.resnet_size = resnet_size
         self.loss_direction_vector_file = loss_direction_vector_file
         self.loss_distances_file = loss_distances_file
+        self.coordinate_offset_after_valid_unet = coordinate_offset_after_valid_unet
 
         self.val_train_set_size = [10, 20, 50, 100, 200, 500, 1000]
         self.val_patch_inference_steps = val_patch_inference_steps
@@ -140,15 +143,16 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         parser.add_argument('--val_patch_inference_steps', type=int, default=None)
         parser.add_argument('--val_patch_inference_downsample', type=int, default=None)
         parser.add_argument('--resnet_size', type=int, default=18)
+        parser.add_argument('--coordinate_offset_after_valid_unet', type=int, default=8)
         parser.add_argument('--loss_direction_vector_file', type=str, default="misc/direction_vectors.npy")
         parser.add_argument('--loss_distances_file', type=str, default="misc/distances.npy")
 
         return parser
 
     def forward(self, x):
-        return self.model(x)[1]
+        return self.model(x)
 
-    def forward_patches(self, x, img=None, vis=False):
+    def forward_patches(self, x):
         # expects input in the shape of
         # x.shape = 
         # (batch, patch_size, channels, patch_width, patch_height)
@@ -165,12 +169,10 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
             return out_0, None
 
     def build_models(self):
-        self.model = PatchedResnet(self.in_channels,
+        self.model = MultiHeadUnet(self.in_channels,
                                     self.out_channels,
-                                    n_heads=self.n_heads,
-                                    pretrained=self.pretrained_model,
-                                    resnet_size=self.resnet_size)
-
+                                    n_heads=self.n_heads)
+        
         self.spatial_transformer = None
         if self.vit_depth > 0:
             self.spatial_transformer = SpatialViT(2,
@@ -193,14 +195,40 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         # ensure that model is in training mode
         self.model.train()
         
-        x, patches, abs_coords, patch_matches, mask = batch
-
-        emb_0, emb_1 = self.forward_patches(patches,
-                                            x,
-                                            vis=(self.global_step % 100 == 0))
+        x, abs_coords, patch_matches, mask = batch
+        emb_0_full, emb_1_full = self.model.forward(x)
+        emb_0 = self.model.select_coords(emb_0_full, abs_coords)
+        emb_1 = self.model.select_coords(emb_1_full, abs_coords)
 
         if self.global_step % 1000 == 0 or (self.global_step < 2000 and self.global_step % 100 == 0):
             if emb_0.requires_grad:
+                img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
+                                                            os.pardir,
+                                                            os.pardir,
+                                                            "img"))
+                for c in range(emb_0_full.shape[1]):
+                    emb_0_grid = make_grid(emb_0_full[:, c:c+1].detach().cpu(), normalize=True, scale_each=True).permute(1, 2, 0).numpy()
+                    imsave(f"{img_directory}/pred__{self.global_step}_{self.local_rank}_{c}.png", emb_0_grid)
+
+                for c in range(emb_1_full.shape[1]):
+                    emb_1_grid = make_grid(emb_1_full[:, c:c+1].detach().cpu(), normalize=True, scale_each=True).permute(1, 2, 0).numpy()
+                    imsave(f"{img_directory}/pred__{self.global_step}_{self.local_rank}_cont_{c}.png", emb_1_grid)
+
+
+                def log_hook_full(grad_input):
+                    img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
+                                              os.pardir,
+                                              os.pardir,
+                                              "img"))
+                    
+                    os.makedirs(img_directory, exist_ok=True)
+                    for c in range(grad_input.shape[1]):
+                        grad_grid = make_grid(grad_input[:, c:c+1].detach().cpu(), normalize=True, scale_each=True).permute(1, 2, 0).numpy()
+                        imsave(f"{img_directory}/grad_full_{self.global_step}_{self.local_rank}_cont_{c}.png", grad_grid)
+                    handle.remove()
+
+                handle = emb_0_full.register_hook(log_hook_full)
+
                 def log_hook(grad_input):
                     img_directory = os.path.abspath(os.path.join(self.logger.log_dir,
                                               os.pardir,
@@ -211,7 +239,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
                     for b in range(len(emb_0)):
                         for c in range(0, emb_0.shape[-1]-1, 2):
                             vis_anchor_embedding(emb_0[b, ..., c:c+2].detach().cpu().numpy(),
-                                abs_coords[b].detach().cpu().numpy(),
+                                self.coordinate_offset_after_valid_unet + abs_coords[b].detach().cpu().numpy(),
                                 x[b].detach().cpu().numpy(),
                                 grad=-grad_input[b, ..., c:c+2].detach().cpu().numpy(),
                                 output_file=[f"{img_directory}/grad_{self.global_step}_{self.local_rank}_{b}_{c}.jpg"])
@@ -223,7 +251,7 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
         emb_0 = ((mask[..., None]).float() * emb_0.detach()) + \
             ((~mask[..., None]).float() * emb_0)
         if emb_1 is not None:
-            anchor_loss = self.anchor_loss(emb_0, emb_1[0], abs_coords, patch_matches)
+            anchor_loss = self.anchor_loss(emb_0, emb_1, abs_coords, patch_matches)
         else:
             anchor_loss = self.anchor_loss(emb_0, abs_coords, patch_matches)
             
@@ -246,32 +274,25 @@ class SSLTrainer(pl.LightningModule, BuildFromArgparse):
 
         # set model to validation mode
         self.model.eval()
-        x, patches, abs_coords, patch_matches, mask, y = batch
+        x, abs_coords, patch_matches, mask, y = batch
 
         with torch.no_grad():
-
-            if self.val_patch_inference_downsample is not None:
-                patches = patches[:, ::self.val_patch_inference_downsample]
-                abs_coords = abs_coords[:, ::self.val_patch_inference_downsample]
-                patch_matches = patch_matches[:, ::self.val_patch_inference_downsample,
-                                                 ::self.val_patch_inference_downsample]
-
-            if self.val_patch_inference_steps is not None:
-                embedding = self.sliced_cpu_forward_patches(patches)
-                abs_coords = abs_coords.cpu()
-                patch_matches = patch_matches.cpu()
-            else:
-                embedding, _ = self.forward_patches(patches)
+            
+            embedding, contr_embedding = self.model.forward(x)
+            print(embedding.shape)
+            print(abs_coords.max())
+            selected_embeddings = self.model.select_coords(embedding, abs_coords)
 
             if self.loss_name == "anchorandcontrasive":
-                loss = self.anchor_loss(embedding, None, abs_coords, patch_matches)
+                loss = self.anchor_loss(selected_embeddings, None, abs_coords, patch_matches)
             else:
-                loss = self.anchor_loss(embedding, abs_coords, patch_matches)
+                loss = self.anchor_loss(selected_embeddings, abs_coords, patch_matches)
+            
             self.log('val_anchor_loss', loss.detach(), on_epoch=True, prog_bar=False, logger=True)
             for margin in [1., 5., 10, 20., 40]:
                 self.validation_loss.push_margin = margin
-                absoute_embedding = self.anchor_loss.absoute_embedding(embedding, abs_coords)
-                pull_loss, push_loss = self.validation_loss(absoute_embedding, abs_coords, y, split_pull_push=True)
+                absoute_embedding = self.anchor_loss.absoute_embedding(selected_embeddings, abs_coords)
+                pull_loss, push_loss = self.validation_loss(selected_embeddings, abs_coords, y, split_pull_push=True)
                 self.log(f'val_clustering_loss_margin_pull_{margin}', pull_loss.detach(), on_epoch=True, prog_bar=False, logger=True)
                 self.log(f'val_clustering_loss_margin_push_{margin}', push_loss.detach(), on_epoch=True, prog_bar=False, logger=True)
                 self.log(f'val_clustering_loss_margin_both_{margin}', (pull_loss+push_loss).detach(), on_epoch=True, prog_bar=False, logger=True)

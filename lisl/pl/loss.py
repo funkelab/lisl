@@ -34,7 +34,7 @@ class AnchorLoss(Module):
     def distance_fn(self, embedding, abs_coords):
         e0 = embedding[:, :, None]
         e1 = embedding[:, None]
-        coord_diff = abs_coords[:, :, None] - abs_coords[:, None]
+        coord_diff = abs_coords[:, :, None] - abs_coords[:, None]        
         diff = (e0 - e1) + coord_diff
         return diff.norm(2, dim=-1)
 
@@ -42,7 +42,6 @@ class AnchorLoss(Module):
         return 1 - (-distance.pow(2) / self.temperature).exp()
 
     def forward(self, embedding, abs_coords, patch_mask) -> Tensor:
-      
         # compute all pairwise distances of anchor embeddings
         dist = self.distance_fn(embedding, abs_coords)
         # dist.shape = (b, p, p)
@@ -70,18 +69,16 @@ class AnchorPlusContrastiveLoss(AnchorLoss):
         self.weight = 10.
     
     def forward(self, embedding, contr_emb, abs_coords, patch_mask) -> Tensor:
-      
         # compute all pairwise distances of anchor embeddings
         dist = self.distance_fn(embedding, abs_coords)
         # dist.shape = (b, p, p)
 
         nonlinear_dist = self.nonlinearity(dist)
-        
         # only matched patches (e.g. patches close in proximity)
         # contripute to the loss
         nonlinear_dist = nonlinear_dist[patch_mask == 1]
 
-        loss = nonlinear_dist.sum()
+        loss = nonlinear_dist.mean()
 
         if contr_emb is None:
             return loss

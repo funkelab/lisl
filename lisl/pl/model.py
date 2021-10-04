@@ -1,4 +1,5 @@
 from confnets.models.unet import UNet, UNet3d
+from unet_fov import UNet as FLUnet
 from confnets.layers import Identity
 from torch import nn
 from torch.nn import functional as F
@@ -103,11 +104,7 @@ class PatchedResnet(nn.Module):
             zs = tuple(head(h) for head in self.heads)
             return h, zs
         else:
-            # apply small MLP
             z = self.head(h)
-            # z.shape = (minibatch, outchannels)
-            if self.add_spatial_dim:
-                return h[..., None, None], z[..., None, None]
             return h, z
 
     def patch_and_forward(self, image):
@@ -136,6 +133,67 @@ class PatchedResnet(nn.Module):
 
         return h, z
 
+class MultiHeadUnet(nn.Module):
+
+    def __init__(
+            self,
+            in_channels,
+            out_channels,
+            n_heads=1):
+
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.features_in_last_layer = 32
+        d_factors = d_factors = [[2,2]]
+        self.backbone = FLUnet(in_channels=self.in_channels,
+                               num_fmaps=256,
+                               fmap_inc_factors=5,
+                               downsample_factors=d_factors,
+                               activation='ReLU',
+                               padding='valid',
+                               num_fmaps_out=self.features_in_last_layer,
+                               constant_upsample=True)
+
+        # Commonly used Non-linear projection head
+        # see https://arxiv.org/pdf/1906.00910.pdf
+        # or https://arxiv.org/pdf/2002.05709.pdf
+        self.heads = nn.ModuleList([torch.nn.Sequential(
+            nn.Conv2d(self.features_in_last_layer, self.features_in_last_layer, 1),
+            nn.ReLU(),
+            nn.Conv2d(self.features_in_last_layer, out_channels[i], 1)) for i in range(n_heads)])
+        
+    @staticmethod
+    def select_coords(output, coords):
+        selection = []
+        for o, c in zip(output, coords):
+            assert(c.max() < max(output.shape[-2:]), f"max coordinate {c.max()} is larger than output shape {max(output.shape[-2:])}")
+            sel = o[:, c[:, 1], c[:, 0]]
+            sel = sel.transpose(1, 0)
+            selection.append(sel)
+        return torch.stack(selection, dim=0)
+
+    def forward(self, raw):
+
+        h = self.backbone(raw)
+
+        if len(self.heads) > 1:
+            zs = tuple(head(h) for head in self.heads)
+            return zs
+        else:
+            # apply small MLP
+            z = self.head(h)
+            # z.shape = (minibatch, outchannels)
+            if self.add_spatial_dim:
+                return h[..., None, None], z[..., None, None]
+            return z
+
+    def forward_and_select(self, raw, coords):
+        # coords.shape = (b, p, 2)
+        h, zs = self.forward(raw)
+        selected_zs = tuple(self.select_coords(z, coords) for z in zs)
+        return selected_zs
 
 def get_unet_kernels(ndim):
     if ndim == 3:
